@@ -1,0 +1,73 @@
+name:                glazier-tutorial
+version:             0.1.0.0
+synopsis:            Console example of using the Glazier FRP framework with pipes-fluid for the signal network.
+description:         Please see README.md
+homepage:            https://github.com/louispan/glazier-tutorial#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Louis Pan
+maintainer:          louis@pan.me
+copyright:           2016 Louis Pan
+category:            FRP, Pipes
+build-type:          Simple
+-- extra-source-files:
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Glazier.Tutorial.App
+                     , Glazier.Tutorial.Counter
+                     , Glazier.Tutorial.IO
+                     , Glazier.Tutorial.Console
+                     , Glazier.Tutorial.Field
+                     , Glazier.Tutorial.Random
+                     , Glazier.Tutorial.SignalModel
+  build-depends:       base >= 4.7 && < 5
+                     , ansi-terminal
+                     , arithmoi
+                     , composition-extra
+                     , containers
+                     , Decimal
+                     , deepseq
+                     , errors
+                     , glazier
+                     , lens
+                     , mmorph
+                     , MonadRandom
+                     , monoidal-containers
+                     , mtl
+                     , pipes
+                     , pipes-concurrency
+                     , pipes-fluid
+                     , pipes-misc
+                     , semigroups
+                     , stm
+                     , text
+                     , transformers
+  ghc-options:         -O2 -Wall
+  default-language:    Haskell2010
+
+executable glazier-tutorial-console-exe
+  hs-source-dirs:      app/Pipes
+  main-is:             ConsoleMain.hs
+  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , Decimal
+                     , glazier-tutorial
+                     , mtl
+                     , pipes-concurrency
+                     , transformers
+  default-language:    Haskell2010
+
+test-suite glazier-tutorial-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base
+                     , glazier-tutorial
+  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/louispan/glazier-tutorial
