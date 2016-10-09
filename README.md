@@ -1,6 +1,6 @@
 Console example of using the [Glazier FRP framework](https://github.com/louispan/glazier) with [pipes-fluid](https://github.com/louispan/pipes-fluid) for the signal network.
 
-The Elm startApp is similar to 'startUi' in conjunction with 'exampleApp'. See [Console.hs](src/Glazier/Tutoria/Console.hs)
+The Elm startApp is similar to 'startUi' in conjunction with 'exampleApp'. See [Console.hs](src/Glazier/Tutorial/Console.hs)
 
 This example shows:
 * how to setup an external signal network using pipes-fluid,
