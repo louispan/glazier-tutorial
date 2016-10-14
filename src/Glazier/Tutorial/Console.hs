@@ -310,7 +310,7 @@ exampleApp
     prod2 = P.hoist lift (PM.fromInputSTM input2) P.>-> PM.store (to Just) GTS.signal2
 
     prodRatio :: P.Producer D.Decimal (StateT GTS.SignalModel STM) ()
-    prodRatio = PFR.reactively $ (/) <$> PFR.React prod1 <*> PFR.React prod2
+    prodRatio = PFR._reactively $ (/) <$> PFR.React prod1 <*> PFR.React prod2
 
     prodRatio' :: P.Producer [D.Decimal] (StateT GTS.SignalModel STM) ()
     prodRatio' = prodRatio P.>-> PM.buffer 2 [] P.>-> PM.store id GTS.ratioOfSignals
