@@ -8,3 +8,5 @@ This example shows:
 * how to obtain and render a frame from the glazier update tick,
 * how to obtain commands from the glazier update tick,
 * how to get data out of glazier model back into the signal network (see threshold TVar)
+
+See also [slides](http://www.slideshare.net/LouisPan3/composable-widgets-with-reactive-pipes).
