@@ -1,3 +1,4 @@
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeSynonymInstances #-}
@@ -24,10 +25,10 @@ instance GTC.AsCounterAction AppAction where
 
 data AppModel =
   AppModel
-  { _appCounterModel :: GTC.CounterModel
-  , _appMessageModel :: T.Text
-  , _appSignalModel  :: GTS.SignalModel
+  { appModelCounterModel :: GTC.CounterModel
+  , appModelMessageModel :: T.Text
+  , appModelSignalModel  :: GTS.SignalModel
   }
   deriving Show
 
-makeClassy ''AppModel
+makeFields ''AppModel

@@ -1,3 +1,6 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Glazier.Tutorial.SignalModel where
@@ -36,10 +39,10 @@ thresholdUpdate f = G.Update $ do
 -- make access and update logic clearer.
 data SignalModel =
   SignalModel
-  { _signal1               :: Maybe D.Decimal
-  , _signal2               :: Maybe D.Decimal
-  , _ratioOfSignals        :: [D.Decimal]
-  , _ratioThresholdCrossed :: Maybe CrossedDirection
+  { signalModelSignal1               :: Maybe D.Decimal
+  , signalModelSignal2               :: Maybe D.Decimal
+  , signalModelRatioOfSignals        :: [D.Decimal]
+  , signalModelRatioThresholdCrossed :: Maybe CrossedDirection
   } deriving (Eq, Show)
 
-makeClassy ''SignalModel
+makeFields ''SignalModel

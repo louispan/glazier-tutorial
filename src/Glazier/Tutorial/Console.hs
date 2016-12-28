@@ -96,8 +96,8 @@ quitWidget mkCtl = G.Widget
     )
   )
 
-toThresholdCommand :: GTA.HasAppModel s => s -> GTS.ThresholdCommand
-toThresholdCommand s = GTS.ThresholdSet . D.Decimal 0 . fromIntegral $ s ^. GTA.appCounterModel
+toThresholdCommand :: GTA.HasCounterModel s GTC.CounterModel => s -> GTS.ThresholdCommand
+toThresholdCommand s = GTS.ThresholdSet . D.Decimal 0 . fromIntegral $ s ^. GTA.counterModel
 
 appWidget :: (GTA.AppAction -> ctl) -> G.Widget GTA.AppAction GTA.AppModel [AppCommand] (Frontend ctl Render)
 appWidget mkCtl = foldMap id $
@@ -112,17 +112,17 @@ appWidget mkCtl = foldMap id $
  where
   mkCtl' = mkCtl . GTA.AppCounterAction
 
-  messageWidget =  G.implant GTA.appMessageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
+  messageWidget =  G.implant GTA.messageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
      GTF.fieldUpdate
      (fieldView $ T.append "Message: ")
 
-  counterDisplayWidget = G.implant GTA.appCounterModel $ G.statically $ counterView "Current count is: "
+  counterDisplayWidget = G.implant GTA.counterModel $ G.statically $ counterView "Current count is: "
 
   spaceView = G.View $ const (mempty, [DisplayText " "])
 
   newlineView = G.View $ const (mempty, [DisplayText "\n"])
 
-  counterWidget = G.implant GTA.appCounterModel $ G.dispatch GTC._CounterAction $ G.Widget
+  counterWidget = G.implant GTA.counterModel $ G.dispatch GTC._CounterAction $ G.Widget
     -- NB. Don't have a counterButtonUpdate per buttonView - that will mean
     -- an inc/dec action will be evaluated twice!
     -- Ie. consider making update idempotent to avoid manually worrrying about this problem.
@@ -148,7 +148,7 @@ appWidget mkCtl = foldMap id $
 
   signalsView = foldMap id $ intersperse newlineView [signal1View, signal2View, ratioView, ratioThresholdCrossedView]
 
-  signalsWidget = G.implant GTA.appSignalModel $ G.dispatch (GTA._SetSignalModel . GTF._FieldAction) $ G.Widget GTF.fieldUpdate signalsView
+  signalsWidget = G.implant GTA.signalModel $ G.dispatch (GTA._SetSignalModel . GTF._FieldAction) $ G.Widget GTF.fieldUpdate signalsView
 
 -- | This is similar to part of the Elm startApp.
 -- This is responsible for running the glazier widget update tick until it quits.
@@ -326,7 +326,7 @@ exampleApp
     threshCrsd' = prodRatio' P.>-> hoist lift threshCrsd
       P.>-> PM.store id GTS.ratioThresholdCrossed
 
-    initialSigModel = appModel ^. GTA.appSignalModel
+    initialSigModel = appModel ^. GTA.signalModel
 
     -- output signal
     prodSigModel :: P.Producer GTS.SignalModel STM ()
