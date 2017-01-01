@@ -34,7 +34,7 @@ import qualified Glazier.Tutorial.Counter as GTC
 import qualified Glazier.Tutorial.Field as GTF
 import qualified Glazier.Tutorial.IO as GTI
 import qualified Glazier.Tutorial.Random as GTR
-import qualified Glazier.Tutorial.SignalModel as GTS
+import qualified Glazier.Tutorial.StreamModel as GTS
 import qualified Pipes as P
 import qualified Pipes.Concurrent as PC
 import qualified Pipes.Fluid.React as PFR
@@ -96,9 +96,6 @@ quitWidget mkCtl = G.Widget
     )
   )
 
-toThresholdCommand :: GTA.HasCounterModel s GTC.CounterModel => s -> GTS.ThresholdCommand
-toThresholdCommand s = GTS.ThresholdSet . D.Decimal 0 . fromIntegral $ s ^. GTA.counterModel
-
 appWidget :: (GTA.AppAction -> ctl) -> G.Widget GTA.AppAction GTA.AppModel [AppCommand] (Frontend ctl Render)
 appWidget mkCtl = foldMap id $
   intersperse (G.statically newlineView)
@@ -133,7 +130,7 @@ appWidget mkCtl = foldMap id $
       , counterButtonView mkCtl' '-' "Press '-' to decrement." GTC.Decrement
       ])
   counterWidget' = fmap AppCounterCommand `first` counterWidget
-  thresholdUpdate' = fmap AppThresholdCommand <$> GTS.thresholdUpdate (Just . toThresholdCommand)
+  thresholdUpdate' = fmap AppThresholdCommand <$> GTS.thresholdUpdate (Just . counterToThresholdCommand)
   counterWidget'' = counterWidget' `mappend` G.dynamically thresholdUpdate'
 
   menuWidget = foldMap id $ intersperse (G.statically spaceView) [counterWidget'', quitWidget mkCtl]
@@ -148,7 +145,7 @@ appWidget mkCtl = foldMap id $
 
   signalsView = foldMap id $ intersperse newlineView [signal1View, signal2View, ratioView, ratioThresholdCrossedView]
 
-  signalsWidget = G.implant GTA.signalModel $ G.dispatch (GTA._SetSignalModel . GTF._FieldAction) $ G.Widget GTF.fieldUpdate signalsView
+  signalsWidget = G.implant GTA.streamModel $ G.dispatch (GTA._SetStreamModel . GTF._FieldAction) $ G.Widget GTF.fieldUpdate signalsView
 
 -- | This is similar to part of the Elm startApp.
 -- This is responsible for running the glazier widget update tick until it quits.
@@ -298,50 +295,56 @@ exampleApp
   (outputUi, inputUi, sealUi) <- liftIO $ PC.spawn' PC.unbounded
 
   -- initialize the threshold TVar to share between the signal network and widget
-  let GTS.ThresholdSet initialT = toThresholdCommand appModel
-  threshold <- liftIO $ newTVarIO initialT
-
-  -- signal network
-  let
-    prod1 :: P.Producer D.Decimal (StateT GTS.SignalModel STM) ()
-    prod1 = P.hoist lift (PM.fromInputSTM input1) P.>-> PM.store (to Just) GTS.signal1
-
-    prod2 :: P.Producer D.Decimal (StateT GTS.SignalModel STM) ()
-    prod2 = P.hoist lift (PM.fromInputSTM input2) P.>-> PM.store (to Just) GTS.signal2
-
-    prodRatio :: P.Producer D.Decimal (StateT GTS.SignalModel STM) ()
-    prodRatio = PFR._reactively $ (/) <$> PFR.React prod1 <*> PFR.React prod2
-
-    prodRatio' :: P.Producer [D.Decimal] (StateT GTS.SignalModel STM) ()
-    prodRatio' = prodRatio P.>-> PM.buffer 2 [] P.>-> PM.store id GTS.ratioOfSignals
-
-    threshCrsd :: P.Pipe [D.Decimal] (Maybe GTS.CrossedDirection) STM ()
-    threshCrsd = P.for P.cat $ \rs -> do
-      t <- lift $ readTVar threshold
-      let r = rs ^? ix 0
-          prevR = rs ^? ix 1
-      P.yield (GTS.thresholdCrossed (Just t) r prevR)
-
-    threshCrsd' :: P.Producer (Maybe GTS.CrossedDirection) (StateT GTS.SignalModel STM) ()
-    threshCrsd' = prodRatio' P.>-> hoist lift threshCrsd
-      P.>-> PM.store id GTS.ratioThresholdCrossed
-
-    initialSigModel = appModel ^. GTA.signalModel
-
-    -- output signal
-    prodSigModel :: P.Producer GTS.SignalModel STM ()
-    prodSigModel = PL.evalStateP initialSigModel (threshCrsd' P.>-> PM.retrieve id)
-
-    consumeSigModel :: P.Consumer GTS.SignalModel IO ()
-    consumeSigModel = do
-      -- await atomically, as it's impossible to await all values in one transaction
-      a <- P.await
-      b <- lift $ atomically $ PC.send outputUi (GTA.SetSignalModel . GTF.SetField $ a)
-      if b
-        then consumeSigModel
-        else pure ()
+  let GTS.ThresholdSet initialThreshold = counterToThresholdCommand appModel
+  threshold <- liftIO $ newTVarIO initialThreshold
 
   -- fork a thread that continously outputs prodSigModel to outputUi
-  void . liftIO . C.forkIO . void . P.runEffect $ hoist atomically prodSigModel P.>-> consumeSigModel
+  void . liftIO . C.forkIO . void . P.runEffect $ hoist atomically (streamModelSignal input1 input2 threshold initialStreamModel) P.>-> consumeInputModel outputUi
 
   void $ startUi refreshDelay appModel outputUi inputUi (seal1 >> seal2 >> sealUi) threshold
+ where
+     initialStreamModel = appModel ^. GTA.streamModel
+
+counterToThresholdCommand :: GTA.HasCounterModel s GTC.CounterModel => s -> GTS.ThresholdCommand
+counterToThresholdCommand s = GTS.ThresholdSet . D.Decimal 0 . fromIntegral $ s ^. GTA.counterModel
+
+-- signal network
+mkSignal :: Lens' s (Maybe D.Decimal) -> PC.Input D.Decimal -> P.Producer D.Decimal (StateT s STM) ()
+mkSignal lns input = P.hoist lift (PM.fromInputSTM input) P.>-> PM.store (to Just) lns
+
+ratioSignal :: PC.Input D.Decimal -> PC.Input D.Decimal -> P.Producer D.Decimal (StateT GTS.StreamModel STM) ()
+ratioSignal input1 input2 = PFR._reactively $ (/) <$> PFR.React (mkSignal GTS.signal1 input1) <*> PFR.React (mkSignal GTS.signal2 input2)
+
+ratiosSignal' :: PC.Input D.Decimal -> PC.Input D.Decimal -> P.Producer [D.Decimal] (StateT GTS.StreamModel STM) ()
+ratiosSignal' input1 input2 = ratioSignal input1 input2 P.>-> PM.buffer 2 [] P.>-> PM.store id GTS.ratioOfSignals
+
+thresholdCrossedSignal :: TVar D.Decimal -> P.Pipe [D.Decimal] (Maybe GTS.CrossedDirection) STM ()
+thresholdCrossedSignal threshold = P.for P.cat $ \rs -> do
+  t <- lift $ readTVar threshold
+  let r = rs ^? ix 0
+      prevR = rs ^? ix 1
+  P.yield (GTS.thresholdCrossed (Just t) r prevR)
+
+-- TODO: rule for threshold crossed
+-- Just (Just x) -> use Just x
+-- Nothing -> use previous Just value
+-- Timer expired (Just Nothing) -> use nothing
+-- This is only possible with animation
+-- Which means we need a signal of: t = (TimePassed, AbsTime)
+-- Then we can create signal: y_next = let y' = y_prev - TimePassed in if y' > 0 then y' else 0
+thresholdCrossedSignal' :: PC.Input D.Decimal -> PC.Input D.Decimal -> TVar D.Decimal -> P.Producer (Maybe GTS.CrossedDirection) (StateT GTS.StreamModel STM) ()
+thresholdCrossedSignal' input1 input2 threshold = ratiosSignal' input1 input2 P.>-> hoist lift (thresholdCrossedSignal threshold)
+  P.>-> PM.store id GTS.ratioThresholdCrossed
+
+-- output signal
+streamModelSignal :: PC.Input D.Decimal -> PC.Input D.Decimal -> TVar D.Decimal -> GTS.StreamModel -> P.Producer GTS.StreamModel STM ()
+streamModelSignal input1 input2 threshold initialInputModel = PL.evalStateP initialInputModel (thresholdCrossedSignal' input1 input2 threshold P.>-> PM.retrieve id)
+
+consumeInputModel :: PC.Output GTA.AppAction -> P.Consumer GTS.StreamModel IO ()
+consumeInputModel outputUi = do
+  -- await atomically, as it's impossible to await all values in one transaction
+  a <- P.await
+  b <- lift $ atomically $ PC.send outputUi (GTA.SetStreamModel . GTF.SetField $ a)
+  if b
+    then consumeInputModel outputUi
+    else pure ()

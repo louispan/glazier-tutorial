@@ -6,7 +6,7 @@ import Control.Monad
 import qualified Data.Decimal as D
 import qualified Glazier.Tutorial.App as GTA
 import qualified Glazier.Tutorial.Console as GTC
-import qualified Glazier.Tutorial.SignalModel as GTS
+import qualified Glazier.Tutorial.StreamModel as GTS
 
 main :: IO ()
 main = void $ GTC.exampleApp
@@ -21,7 +21,7 @@ main = void $ GTC.exampleApp
     desired2
     threshold2
     interval2
-    (GTA.AppModel 5 "Hello, world!" $ GTS.SignalModel Nothing Nothing [] Nothing)
+    (GTA.AppModel 5 "Hello, world!" $ GTS.StreamModel Nothing Nothing [] Nothing)
  where
   interval1 = (5000000, 1000000)
   start1 = D.Decimal 0 130

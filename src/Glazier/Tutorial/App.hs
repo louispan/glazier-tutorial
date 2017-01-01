@@ -9,14 +9,14 @@ import Control.Lens
 import qualified Data.Text as T
 import qualified Glazier.Tutorial.Counter as GTC
 import qualified Glazier.Tutorial.Field as GTF
-import qualified Glazier.Tutorial.SignalModel as GTS
+import qualified Glazier.Tutorial.StreamModel as GTS
 
 data AppAction =
     Redraw
   | Close
   | AppCounterAction GTC.CounterAction
   | AppMessageAction (GTF.FieldAction T.Text)
-  | SetSignalModel (GTF.FieldAction GTS.SignalModel)
+  | SetStreamModel (GTF.FieldAction GTS.StreamModel)
 
 makeClassyPrisms ''AppAction
 
@@ -27,7 +27,7 @@ data AppModel =
   AppModel
   { appModelCounterModel :: GTC.CounterModel
   , appModelMessageModel :: T.Text
-  , appModelSignalModel  :: GTS.SignalModel
+  , appModelStreamModel  :: GTS.StreamModel
   }
   deriving Show
 

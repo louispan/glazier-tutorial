@@ -3,7 +3,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Glazier.Tutorial.SignalModel where
+module Glazier.Tutorial.StreamModel where
 
 import Control.Lens
 import Control.Monad.State.Strict
@@ -37,12 +37,12 @@ thresholdUpdate f = G.Update $ do
 -- outputs.
 -- The idea is then to use the classy lens pattern around this tuple to
 -- make access and update logic clearer.
-data SignalModel =
-  SignalModel
-  { signalModelSignal1               :: Maybe D.Decimal
-  , signalModelSignal2               :: Maybe D.Decimal
-  , signalModelRatioOfSignals        :: [D.Decimal]
-  , signalModelRatioThresholdCrossed :: Maybe CrossedDirection
+data StreamModel =
+  StreamModel
+  { streamModelSignal1               :: Maybe D.Decimal
+  , streamModelSignal2               :: Maybe D.Decimal
+  , streamModelRatioOfSignals        :: [D.Decimal]
+  , streamModelRatioThresholdCrossed :: Maybe CrossedDirection
   } deriving (Eq, Show)
 
-makeFields ''SignalModel
+makeFields ''StreamModel

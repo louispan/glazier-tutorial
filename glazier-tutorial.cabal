@@ -21,7 +21,7 @@ library
                      , Glazier.Tutorial.Console
                      , Glazier.Tutorial.Field
                      , Glazier.Tutorial.Random
-                     , Glazier.Tutorial.SignalModel
+                     , Glazier.Tutorial.StreamModel
   build-depends:       base >= 4.7 && < 5
                      , ansi-terminal
                      , arithmoi
