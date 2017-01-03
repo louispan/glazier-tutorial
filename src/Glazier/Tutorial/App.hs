@@ -13,7 +13,7 @@ import qualified Glazier.Tutorial.StreamModel as GTS
 
 data AppAction =
     Redraw
-  | Close
+  | Quit
   | AppCounterAction GTC.CounterAction
   | AppMessageAction (GTF.FieldAction T.Text)
   | SetStreamModel (GTF.FieldAction GTS.StreamModel)

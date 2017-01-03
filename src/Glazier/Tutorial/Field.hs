@@ -24,8 +24,8 @@ instance AsFieldAction (FieldAction a) a where
             SetField
             (\(SetField a) -> Right a)
 
-fieldUpdate :: G.Update (FieldAction a) a [r]
-fieldUpdate = G.Update $ do
+notifyField :: G.Notify (FieldAction a) a [r]
+notifyField = G.Notify $ do
   a <- ask
   case a of
     SetField a' -> do

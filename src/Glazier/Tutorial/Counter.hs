@@ -24,8 +24,8 @@ data CounterCommand = UpperBoundsExceeded | LowerBoundsExceeded
 -- Otherwise, if processing it held up, you may get multiple "IncrementBy LargeNumber"
 -- which is not expected behaviour.
 -- Alternatively, consider changing the Action to be idempotent (eg only @SetCount Int@).
-counterButtonUpdate :: Int -> G.Update CounterAction CounterModel [CounterCommand]
-counterButtonUpdate b = G.Update $ do
+notifyCounterButton :: Int -> G.Notify CounterAction CounterModel [CounterCommand]
+notifyCounterButton b = G.Notify $ do
   a <- ask
   case a of
     ResetCount -> do

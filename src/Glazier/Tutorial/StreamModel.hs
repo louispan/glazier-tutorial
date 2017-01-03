@@ -26,8 +26,8 @@ data ThresholdCommand = ThresholdSet D.Decimal
 -- | Given a function to get the threshold from the current state,
 -- return an Update function that will ignore the input action, and
 -- return a ThresholdSet command
-thresholdUpdate :: (s -> Maybe ThresholdCommand) -> G.Update a s [ThresholdCommand]
-thresholdUpdate f = G.Update $ do
+notifyThreshold :: (s -> Maybe ThresholdCommand) -> G.Notify a s [ThresholdCommand]
+notifyThreshold f = G.Notify $ do
   s <- get
   pure (catMaybes [f s])
 

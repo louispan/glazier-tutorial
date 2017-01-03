@@ -18,6 +18,9 @@ packages:
 - location:
    git: https://github.com/louispan/pipes-fluid.git
    commit: HEAD
+- location:
+   git: https://github.com/louispan/alternators.git
+   commit: HEAD
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps: []
