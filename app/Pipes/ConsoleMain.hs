@@ -10,7 +10,7 @@ import qualified Glazier.Tutorial.StreamModel as GTS
 
 main :: IO ()
 main = void $ GTC.exampleApp
-    500000
+    200000
     start1
     tick1
     desired1
@@ -21,9 +21,9 @@ main = void $ GTC.exampleApp
     desired2
     threshold2
     interval2
-    (GTA.AppModel 5 "Hello, world!" $ GTS.StreamModel Nothing Nothing [] Nothing)
+    (GTA.AppModel 5 (GTA.MessageModel "Hello, world!" True) (GTS.StreamModel Nothing Nothing [] Nothing))
  where
-  interval1 = (5000000, 1000000)
+  interval1 = (500000, 1000000)
   start1 = D.Decimal 0 130
   desired1 = D.Decimal 0 130
   tick1 = D.Decimal 0 20

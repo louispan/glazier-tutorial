@@ -45,6 +45,7 @@ library
                      , pipes-misc
                      , semigroups
                      , stm
+                     , stm-extras
                      , text
                      , transformers
   ghc-options:         -O2 -Wall

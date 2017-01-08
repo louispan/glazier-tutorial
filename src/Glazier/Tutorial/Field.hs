@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Glazier.Tutorial.Field where
 
@@ -10,24 +11,14 @@ import Control.Monad.State.Strict
 import qualified Glazier as G
 
 -- | Basic widget which can be set to a new value
-newtype FieldAction a = SetField a
+data FieldAction s = SetField s | ModifyField (s -> s)
 
--- | can't makeClassyPrisms for single constructor
-class AsFieldAction s a | s -> a where
-  _FieldAction :: Prism' s (FieldAction a)
-  _SetField :: Prism' s a
-  _SetField = _FieldAction . _SetField
+makeClassyPrisms ''FieldAction
 
-instance AsFieldAction (FieldAction a) a where
-  _FieldAction = id
-  _SetField = prism
-            SetField
-            (\(SetField a) -> Right a)
-
-notifyField :: G.Notify (FieldAction a) a [r]
+notifyField :: G.Notify (FieldAction s) s [r]
 notifyField = G.Notify $ do
-  a <- ask
-  case a of
-    SetField a' -> do
-      put a'
-      pure []
+    a <- ask
+    case a of
+        SetField s -> put s
+        ModifyField f -> modify f
+    pure []

@@ -10,9 +10,10 @@
 module Glazier.Tutorial.Console where
 
 import Control.Applicative
-import qualified Control.Concurrent as C
+import Control.Concurrent
+import Control.Concurrent.MVar
 import Control.Concurrent.STM
-import qualified Control.Concurrent.Extra as CE
+import Control.Concurrent.STM.TMVar.Extras as STE
 import Control.Exception (bracket)
 import Control.Lens
 import Control.Monad
@@ -62,7 +63,7 @@ depictCounter txt = G.Depict $ \n -> (mempty, [DisplayText . T.append txt . T.pa
 
 depictCounterButton
   :: (GTC.CounterAction -> ctl) -> Char -> T.Text -> GTC.CounterAction -> G.Depict GTC.CounterModel (Frontend ctl Rendering)
-depictCounterButton mkCtl c txt action = G.Depict $ \ n -> (view (from _Wrapped') $ M.singleton c [control n], [render txt])
+depictCounterButton sendAction c txt action = G.Depict $ \ n -> (view (from _Wrapped') $ M.singleton c [control n], [render txt])
  where
   render = DisplayText
   -- NB. Although it's possible to have different control behaviour based on the state
@@ -71,34 +72,44 @@ depictCounterButton mkCtl c txt action = G.Depict $ \ n -> (view (from _Wrapped'
   -- If processing was held up, and there was a backlog of decrements.
   -- all the decrements fired will be large decrements, instead of slowly smaller decrements.
   -- It is much safer to have stateful logic in the `Notify`, instead of the `Depict`.
-  control = const $ mkCtl action
+  control = const $ sendAction action
 
 depictField :: (a -> T.Text) -> G.Depict a (Frontend ctrl Rendering)
 depictField f = G.Depict $ \msg ->
   ( mempty --ctls
   , let msg' = f msg
-    in if T.null msg' -- render
+    in if T.null $ msg' -- render
     then []
     else pure . DisplayText $ msg'
   )
 
-quitWidget :: (GTA.AppAction -> ctl) -> G.Widget GTA.AppAction n [AppCommand] (Frontend ctl Rendering)
-quitWidget mkCtl = G.Widget
+quitWidget :: (GTA.AppAction -> ctl) -> G.Widget GTA.AppAction GTA.AppModel [AppCommand] (Frontend ctl Rendering)
+quitWidget sendAction = G.Widget
   (G.Notify $ do
     a <- ask
     lift $ case a of
-      GTA.Quit -> pure [QuitCommand]
+      GTA.Quit -> do
+          -- FIXME: Could this be a send action?
+          GTA.messageModel . GTA.messageIsTemporary .= False -- FIXME: is there a way to make this work as temporary message?
+          GTA.messageModel . GTA.messageText .= "Quitting"
+          pure [QuitCommand]
       _ -> pure []
   )
   (G.Depict $ const
-    -- ( MM.MonoidalMap $ M.singleton 'q' [mkCtl GTA.Close] -- MonoidalMap is accidentally hidden. Will be fixed in monoidal-containers >= 0.3.0.1
-    ( view (from _Wrapped') $ M.singleton 'q' [mkCtl GTA.Quit]
+    ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.Quit] -- MonoidalMap is accidentally hidden. Will be fixed in monoidal-containers >= 0.3.0.1
     , [DisplayText "Press 'q' to quit"]
     )
   )
 
+messageWidget ::
+  (GTA.HasMessageModel s GTA.MessageModel, GTA.AsAppAction b) =>
+  G.Widget b s [r] (MM.MonoidalMap Char [ctrl], [Rendering])
+messageWidget =  G.implant GTA.messageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
+ GTF.notifyField
+ (depictField (\s -> T.append "Message: " (s ^. GTA.messageText)))
+
 appWidget :: (GTA.AppAction -> ctl) -> G.Widget GTA.AppAction GTA.AppModel [AppCommand] (Frontend ctl Rendering)
-appWidget mkCtl = foldMap id $
+appWidget sendAction = foldMap id $
   intersperse (G.statically depictNewline)
   [ G.statically depictNewline
   , messageWidget
@@ -108,11 +119,8 @@ appWidget mkCtl = foldMap id $
   , G.statically depictNewline
   ]
  where
-  mkCtl' = mkCtl . GTA.AppCounterAction
 
-  messageWidget =  G.implant GTA.messageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
-     GTF.notifyField
-     (depictField $ T.append "Message: ")
+  sendAction' = sendAction . GTA.AppCounterAction
 
   counterDisplayWidget = G.implant GTA.counterModel $ G.statically $ depictCounter "Current count is: "
 
@@ -127,14 +135,14 @@ appWidget mkCtl = foldMap id $
     -- Alternatively, have an incrementNotify and decrementNotify.
     (GTC.notifyCounterButton 5000)
     (foldMap id $ intersperse depictSpace
-      [ depictCounterButton mkCtl' '+' "Press '+' to increment." GTC.Increment
-      , depictCounterButton mkCtl' '-' "Press '-' to decrement." GTC.Decrement
+      [ depictCounterButton sendAction' '+' "Press '+' to increment." GTC.Increment
+      , depictCounterButton sendAction' '-' "Press '-' to decrement." GTC.Decrement
       ])
   counterWidget' = fmap AppCounterCommand `first` counterWidget
   notifyThreshold' = fmap AppThresholdCommand <$> GTS.notifyThreshold (Just . counterToThresholdCommand)
   counterWidget'' = counterWidget' `mappend` G.dynamically notifyThreshold'
 
-  menuWidget = foldMap id $ intersperse (G.statically depictSpace) [counterWidget'', quitWidget mkCtl]
+  menuWidget = foldMap id $ intersperse (G.statically depictSpace) [counterWidget'', quitWidget sendAction]
 
   depictSignal1 = depictField $ \s -> "Signal1: " `T.append` (T.pack . show $ D.roundTo 2 <$> s ^. GTS.signal1)
 
@@ -148,82 +156,10 @@ appWidget mkCtl = foldMap id $
 
   signalsWidget = G.implant GTA.streamModel $ G.dispatch (GTA._SetStreamModel . GTF._FieldAction) $ G.Widget GTF.notifyField depictSignals
 
--- | This is similar to part of the Elm startApp.
--- This is responsible for running the glazier widget update tick until it quits.
--- This is also responsible for rendering the frame and interpreting commands.
-startUi :: MonadIO io =>
-     Int
-  -> GTA.AppModel
-  -> PC.Output GTA.AppAction
-  -> PC.Input GTA.AppAction
-  -> STM ()
-  -> TVar D.Decimal -- TODO: Make more generic
-  -> io GTA.AppModel
-startUi refreshDelay initialState address inbox seal threshold = do
-  -- sendAction :: GTA.AppAction -> MaybeT STM ()
-  let sendAction = (MaybeT . fmap guard) <$> PC.send address
-      (xs, render) = G.startWidget (appWidget sendAction) inbox
-      tickState = SE.maybeState $ hoist (MaybeT . liftIO . atomically . PC.recv) xs
-  -- controls thread
-  -- continuously process user input using ctls until it fails (quit)
-  -- pushs actions into update thread
-  ctls <- liftIO newEmptyTMVarIO
-  ctlsThread <- liftIO $ C.forkIO . void . withNoBuffering . runMaybeT . forever $ interpretControls sendAction ctls
-
-  -- framerate thread
-  -- TMVar to indicate that the render thread can render, start non empty so we can render straight away.
-  canRender <- liftIO $ newTMVarIO ()
-  frameRateThread <- liftIO $ C.forkIO . void . forever $ do
-      -- wait until canRender is empty
-      atomically $ do
-          putTMVar canRender ()
-          void $ takeTMVar canRender
-      -- if empty, then wait delay before filling TMVar with next canRender message
-      C.threadDelay refreshDelay
-      atomically $ putTMVar canRender ()
-
-  -- render thread
-  finishedRenderThread <- liftIO newEmptyTMVarIO
-  (renderOutput, renderInput, renderSeal) <- liftIO . PC.spawn' $ PC.newest 1
-  void $ liftIO $ CE.forkFinally
-      (void . runMaybeT . forever $ renderFrame renderInput)
-      (const . atomically $ putTMVar finishedRenderThread ())
-
-  -- this is called after each tick with the new state to render
-  let onFrame s =  MaybeT . liftIO . atomically $ tryRender s <|> pure (Just ())
-      tryRender s = do
-          -- check if we can render
-          void $ takeTMVar canRender
-          let (ctls', frame') = render s
-          -- store latest controls and rendering frame
-          void $ forceSwapTMVar ctls ctls'
-          guard <$> PC.send renderOutput frame'
-
-      quit = seal >> renderSeal
-
-  s' <- liftIO . (`execStateT` initialState) . runMaybeT $ do
-        -- With 'G.startWidget', tick will be blocked if there is nothing in
-        -- the address inbox, ie if 'send' was not used.
-        -- So send a dummy action to start things off, otherwise we'll get
-        -- STM blocked indefinitely exception
-        hoist (liftIO . atomically) (sendAction GTA.Redraw)
-        -- update thread. Loop while there is a frame and no error or quit
-        forever $ G.runNotify tickState onFrame (interpretCommands sendAction quit threshold)
-
-  -- cleanup
-  liftIO $ atomically quit -- just in case we go here due to a render error
-  liftIO $ C.killThread ctlsThread
-  liftIO $ C.killThread frameRateThread
-  -- wait for render thread to finish before exiting
-  liftIO . atomically $ takeTMVar finishedRenderThread
-  -- return final state
-  liftIO $ pure s'
-
-renderFrame :: MonadIO io => PC.Input [Rendering] -> MaybeT io ()
+renderFrame :: MonadIO io => [Rendering] -> io ()
 renderFrame frame = do
-  frame' <- MaybeT $ liftIO $ atomically $ PC.recv frame
   liftIO ANSI.clearScreen
-  liftIO $ traverse_ process frame'
+  liftIO $ traverse_ process frame
  where
   process (DisplayText txt) = putStr . T.unpack $ txt
 
@@ -236,10 +172,18 @@ interpretControls sendAction ctls = do
   c <- liftIO getChar
   hoist (liftIO . atomically) $ do
     ctls' <- lift $ readTMVar ctls
-    sendAction (GTA.AppMessageAction . GTF.SetField $ mempty) -- reset message on user input
     case M.lookup c (view _Wrapped' ctls') of
-      Nothing -> sendAction (GTA.AppMessageAction . GTF.SetField $ "Invalid user input")
-      Just xs -> sequenceA_ xs
+      Nothing -> sendAction (GTA.AppMessageAction (GTF.ModifyField $
+                                                   \s -> s & GTA.messageIsTemporary .~ True
+                                                           & GTA.messageText .~ "Invalid user input"))
+      Just xs -> do
+          -- reset message on user input
+          sendAction (GTA.AppMessageAction (GTF.ModifyField $
+                                                   \s -> if s ^. GTA.messageIsTemporary
+                                                         then s & GTA.messageIsTemporary .~ False
+                                                                & GTA.messageText .~ ""
+                                                         else s))
+          sequenceA_ xs
 
 withNoBuffering :: IO a -> IO a
 withNoBuffering action =
@@ -248,29 +192,112 @@ withNoBuffering action =
     action
 
 -- external effect processing - gather commands, and on Cmd, do something
-interpretCommands :: (MonadIO io,  Traversable t) =>
+interpretCommands :: (MonadIO io, Traversable t) =>
   (GTA.AppAction -> MaybeT STM ())
-  -> STM ()
   -> TVar D.Decimal
   -> t AppCommand
   -> MaybeT io ()
-interpretCommands sendAction seal threshold = traverse_ process
+interpretCommands sendAction threshold = traverse_ process
  where
-  process QuitCommand = do
-    liftIO $ atomically seal
-    empty
+  process QuitCommand = empty
   process (AppThresholdCommand (GTS.ThresholdSet t)) = liftIO . atomically $ writeTVar threshold t
    -- default just show the command
-  process a = hoist (liftIO . atomically) $ sendAction (GTA.AppMessageAction . GTF.SetField $ T.pack $ show a)
+  process a = hoist (liftIO . atomically) $ sendAction (GTA.AppMessageAction . GTF.ModifyField $ \s ->
+                                                               s & GTA.messageText .~ T.pack (show a)
+                                                                 & GTA.messageIsTemporary .~ True)
 
--- | forces a swap of TMVar irreguardless if it previously contained a value or not.
--- returns what was in the TMVar (if exists)
-forceSwapTMVar :: TMVar a -> a -> STM (Maybe a)
-forceSwapTMVar v a = (Just <$> swapTMVar v a) `orElse` (const Nothing <$> putTMVar v a)
+-- | This is similar to part of the Elm startApp.
+-- This is responsible for running the glazier widget update tick until it quits.
+-- This is also responsible for rendering the frame and interpreting commands.
+runUi :: MonadIO io =>
+     Int
+  -> GTA.AppModel
+  -> PC.Output GTA.AppAction
+  -> PC.Input GTA.AppAction
+  -> TVar D.Decimal -- TODO: Make more generic
+  -> io GTA.AppModel
+runUi refreshDelay initialState address inbox threshold
+ = do
+    -- sendAction :: GTA.AppAction -> MaybeT STM ()
+    let sendAction = (MaybeT . fmap guard) <$> PC.send address
+        (xs, render) = G.startWidget (appWidget sendAction) inbox
+        tickState =
+            SE.maybeState $ hoist (MaybeT . liftIO . atomically . PC.recv) xs
+    -- controls thread
+    -- continuously process user input using ctls until it fails (quit)
+    -- pushs actions into update thread
+    ctls <- liftIO newEmptyTMVarIO
+    ctlsThread <-
+        liftIO $
+        forkIO . void . withNoBuffering . runMaybeT . forever $
+        interpretControls sendAction ctls
+    -- framerate thread
+    -- TMVar to indicate that the render thread can render, start non empty so we can render straight away.
+    triggerRender <- liftIO $ newTMVarIO ()
+    frameRateThread <-
+        liftIO $
+        forkIO . void . forever $
+        -- The will ensure a refreshDelay in between times when value in canRender is taken.
+        -- wait until canRender is empty (ie taken by the render thread)
+         do
+            atomically $ STE.waitTillEmptyTMVar triggerRender ()
+            -- if empty, then wait delay before filling TMVar with next canRender value
+            threadDelay refreshDelay
+            atomically $ putTMVar triggerRender ()
+    -- render thread
+    enableRenderThread <- liftIO $ newTMVarIO ()
+    finishedRenderThread <- liftIO newEmptyTMVarIO
+    frameState <- liftIO newEmptyTMVarIO
+    void . liftIO $
+        forkFinally
+            (void . runMaybeT . forever $
+              -- check if we can start render
+              do
+                 liftIO . atomically . void $ takeTMVar triggerRender
+                 -- to allow rendering of last frame before quitting
+                 -- if there is no state to render, check if rendering is disabled
+                 s <-
+                     MaybeT . liftIO . atomically $
+                     (Just <$> takeTMVar frameState) `orElse` do
+                         r <- tryReadTMVar enableRenderThread
+                         case r of
+                             Nothing -> pure Nothing -- breaks (runMaybeT . forever) loop
+                             Just _ -> retry
+                 let (ctls', frame') = render s
+                 liftIO . atomically . void $ STE.forceSwapTMVar ctls ctls'
+                 liftIO $ renderFrame frame')
+            (const . atomically $ putTMVar finishedRenderThread ())
+    -- this is called after each tick with the new state to render
+    let onFrame s = void . liftIO . atomically $ STE.forceSwapTMVar frameState s
+    s' <-
+        liftIO . (`execStateT` initialState) . runMaybeT $
+        -- With 'G.startWidget', tick will be blocked if there is nothing in
+        -- the address inbox, ie if 'send' was not used.
+        -- So send a dummy action to start things off, otherwise we'll get
+        -- STM blocked indefinitely exception
+         do
+            hoist (liftIO . atomically) (sendAction GTA.Redraw)
+            -- update thread. Loop while there is a frame and no error or quit
+            forever $
+                G.runNotify
+                    tickState
+                    onFrame
+                    (interpretCommands sendAction threshold)
+    -- cleanup
+    -- allow rendering of the frame one last time
+    liftIO . atomically $ takeTMVar enableRenderThread
+    -- wait for render thread to finish before exiting
+    liftIO . atomically $ takeTMVar finishedRenderThread
+    -- kill frameRateThread only after render thread has finished
+    -- since renderThread waits on triggers from frameRateThread
+    liftIO $ killThread frameRateThread
+    liftIO $ killThread ctlsThread
+    -- return final state
+    liftIO $ pure s'
 
 -- | This is similar to part of the Elm startApp.
 -- This is responsible for setting up the external signal network before running
--- the glazier widget framework using 'startUi'.
+-- the glazier widget framework using 'runUi'.
 exampleApp :: MonadIO io =>
      Int
   -> D.Decimal
@@ -300,16 +327,16 @@ exampleApp
   appModel
   = do
   -- threads for generating random signals
-  (output1, input1, seal1) <- liftIO . PC.spawn' $ PC.newest 1
-  void . liftIO . C.forkIO . void . (`execStateT` start1) . forever . runMaybeT $ GTR.randomSignal
+  (output1, input1) <- liftIO . PC.spawn $ PC.newest 1
+  void . liftIO . forkIO . void . (`execStateT` start1) . forever . runMaybeT $ GTR.randomSignal
     tick1
     desired1
     threshold1
     interval1
     (PC.send output1)
 
-  (output2, input2, seal2) <- liftIO . PC.spawn' $ PC.newest 1
-  void . liftIO . C.forkIO . void . (`execStateT` start2) . forever . runMaybeT $ GTR.randomSignal
+  (output2, input2) <- liftIO . PC.spawn $ PC.newest 1
+  void . liftIO . forkIO . void . (`execStateT` start2) . forever . runMaybeT $ GTR.randomSignal
     tick2
     desired2
     threshold2
@@ -317,7 +344,7 @@ exampleApp
     (PC.send output2)
 
   -- threads for rendering and controlling UI
-  (outputUi, inputUi, sealUi) <- liftIO $ PC.spawn' PC.unbounded
+  (outputUi, inputUi) <- liftIO $ PC.spawn PC.unbounded
   -- (outputStopwatch, inputStopwatch, sealStopwatch) <- liftIO $ PC.spawn' PC.unbounded
 
   -- initialize the threshold TVar to share between the signal network and widget
@@ -325,10 +352,10 @@ exampleApp
   threshold <- liftIO $ newTVarIO initialThreshold
 
   -- fork a thread that continously outputs prodSigModel to outputUi
-  void . liftIO . C.forkIO . void . P.runEffect $ hoist atomically (streamModelSignal input1 input2 threshold initialStreamModel) P.>-> consumeStreamModel outputUi
+  void . liftIO . forkIO . void . P.runEffect $ hoist atomically (streamModelSignal input1 input2 threshold initialStreamModel) P.>-> consumeStreamModel outputUi
 
   -- finally run the main gui threads
-  void $ startUi refreshDelay appModel outputUi inputUi (seal1 >> seal2 >> sealUi) threshold
+  void $ runUi refreshDelay appModel outputUi inputUi threshold
  where
      initialStreamModel = appModel ^. GTA.streamModel
 
