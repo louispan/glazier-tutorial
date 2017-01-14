@@ -10,6 +10,7 @@ import Control.Monad.State.Strict
 import qualified Data.Decimal as D
 import Data.Maybe
 import qualified Glazier as G
+import qualified Glazier.Strict as G
 
 data CrossedDirection = CrossedUpwards | CrossedDownwards
   deriving (Eq, Show)
@@ -26,8 +27,8 @@ data ThresholdCommand = ThresholdSet D.Decimal
 -- | Given a function to get the threshold from the current state,
 -- return an Update function that will ignore the input action, and
 -- return a ThresholdSet command
-notifyThreshold :: (s -> Maybe ThresholdCommand) -> G.Notify a s [ThresholdCommand]
-notifyThreshold f = G.Notify $ do
+thresholdGadget :: Monad m => (s -> Maybe ThresholdCommand) -> G.Gadget s m a [ThresholdCommand]
+thresholdGadget f = G.Gadget $ do
   s <- get
   pure (catMaybes [f s])
 
