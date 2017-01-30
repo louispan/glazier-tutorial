@@ -13,17 +13,10 @@ import qualified Glazier.Tutorial.Counter as GTC
 import qualified Glazier.Tutorial.Field as GTF
 import qualified Glazier.Tutorial.StreamModel as GTS
 
-data MessageModel = MessageModel
-    { messageModelMessageText :: T.Text
-    , messageModelMessageIsTemporary :: Bool
-    } deriving (Show)
-makeFields ''MessageModel
-
 data AppAction =
-    Redraw
-  | Quit
+  QuitAction
   | AppCounterAction GTC.CounterAction
-  | AppMessageAction (GTF.FieldAction MessageModel)
+  | AppMessageAction (GTF.FieldAction T.Text)
   | SetStreamModel (GTF.FieldAction GTS.StreamModel)
 
 makeClassyPrisms ''AppAction
@@ -33,7 +26,7 @@ instance GTC.AsCounterAction AppAction where
 
 data AppModel = AppModel
     { appModelCounterModel :: GTC.CounterModel
-    , appModelMessageModel :: MessageModel
+    , appModelMessageModel :: T.Text
     , appModelStreamModel :: GTS.StreamModel
     } deriving (Show)
 

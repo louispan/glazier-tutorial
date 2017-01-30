@@ -61,7 +61,6 @@ makeFields ''StreamConfig
 data AppCommand
     = AppCounterCommand GTC.CounterCommand
     | QuitCommand
-    deriving (Eq, Show)
 
 -- | Rendering instruction
 -- NB. Free monad is not required for this interpreter
@@ -98,28 +97,26 @@ fieldWindow f = review G._Window $ \msg -> pure
     )
 
 quitWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget GTA.AppModel (Frontend ctl Rendering) m GTA.AppAction [AppCommand]
-quitWidget sendAction = G.Widget
-    (G.Window $ pure
-        ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.Quit]
-        , [DisplayText "Press 'q' to quit"]
-        )
-    )
-    (G.Gadget $ do
-        a <- ask
-        lift $ case a of
-            GTA.Quit -> do
-                -- FIXME: Could this be a send action?
-                GTA.messageModel . GTA.messageIsTemporary .= False -- FIXME: is there a way to make this work as temporary message?
-                GTA.messageModel . GTA.messageText .= "Quitting"
-                pure [QuitCommand]
-            _ -> pure []
-    )
+quitWidget sendAction =
+    G.Widget
+        (G.Window $
+         pure
+             ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuitAction]
+             , [DisplayText "Press 'q' to quit"]))
+        (G.Gadget $ do
+             a <- ask
+             lift $
+                 case a of
+                     GTA.QuitAction -> do
+                         GTA.messageModel .= "Quitting"
+                         pure [QuitCommand]
+                     _ -> pure [])
 
-messageWidget
-    :: (GTA.HasMessageModel s GTA.MessageModel, GTA.AsAppAction b, Monad m)
-    => G.Widget s (MM.MonoidalMap Char [ctrl], [Rendering]) m b [r]
+messageWidget ::
+  (GTA.HasMessageModel s T.Text, GTA.AsAppAction a, Monad m) =>
+  G.Widget s (MM.MonoidalMap Char [ctrl], [Rendering]) m a [r]
 messageWidget =  G.implant GTA.messageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
-    (fieldWindow (\s -> (T.append "Message: " (s ^. GTA.messageText))))
+    (fieldWindow (\s -> (T.append "Message: " s)))
     GTF.fieldGadget
 
 spaceWindow ::
@@ -222,10 +219,10 @@ appWidget sendAction = foldMap id $
 
 renderFrame :: MonadIO io => [Rendering] -> io ()
 renderFrame frame = do
-  liftIO ANSI.clearScreen
-  liftIO $ traverse_ process frame
- where
-  process (DisplayText txt) = putStr . T.unpack $ txt
+    liftIO ANSI.clearScreen
+    liftIO $ traverse_ process frame
+  where
+    process (DisplayText txt) = putStr . T.unpack $ txt
 
 -- | Get user input and pump into address AppAction
 interpretControls :: MonadIO io =>
@@ -233,54 +230,33 @@ interpretControls :: MonadIO io =>
   -> TMVar (MM.MonoidalMap Char [MaybeT STM ()])
   -> MaybeT io ()
 interpretControls sendAction ctls = do
-  c <- liftIO getChar
-  hoist (liftIO . atomically) $ do
-    ctls' <- lift $ readTMVar ctls
-    case M.lookup c (view _Wrapped' ctls') of
-      Nothing -> sendAction (GTA.AppMessageAction (GTF.ModifyField $
-                                                   \s -> s & GTA.messageIsTemporary .~ True
-                                                           & GTA.messageText .~ "Invalid user input"))
-      Just xs -> do
-          -- reset message on user input
-          sendAction (GTA.AppMessageAction (GTF.ModifyField $
-                                                   \s -> if s ^. GTA.messageIsTemporary
-                                                         then s & GTA.messageIsTemporary .~ False
-                                                                & GTA.messageText .~ ""
-                                                         else s))
-          sequenceA_ xs
+    c <- liftIO getChar
+    hoist (liftIO . atomically) $ do
+        ctls' <- lift $ readTMVar ctls
+        -- lookup what STM actions to do for that key pressed
+        case M.lookup c (view _Wrapped' ctls') of
+            Nothing ->
+                sendAction
+                    (GTA.AppMessageAction
+                         (GTF.ModifyField $ const "Invalid user input"))
+            -- reset message on user input
+            Just xs -> do
+                sendAction (GTA.AppMessageAction (GTF.ModifyField $ const ""))
+                sequenceA_ xs
 
 withNoBuffering :: IO a -> IO a
 withNoBuffering action =
-  bracket (IO.hGetBuffering IO.stdin) (IO.hSetBuffering IO.stdin) $ \_ -> do
-    IO.hSetBuffering IO.stdin IO.NoBuffering
-    action
+    bracket (IO.hGetBuffering IO.stdin) (IO.hSetBuffering IO.stdin) $ \_ -> do
+        IO.hSetBuffering IO.stdin IO.NoBuffering
+        action
 
--- external effect processing - gather commands, and on Cmd, do something
-interpretCommands :: (MonadIO io, Traversable t) =>
-  (GTA.AppAction -> MaybeT STM ())
-  -> t AppCommand
-  -> MaybeT io ()
-interpretCommands sendAction = traverse_ process
- where
-  process QuitCommand = empty
-   -- default just show the command
-  process a = hoist (liftIO . atomically) $ sendAction (GTA.AppMessageAction . GTF.ModifyField $ \s ->
-                                                               s & GTA.messageText .~ T.pack (show a)
-                                                                 & GTA.messageIsTemporary .~ True)
-
-
--- external effect processing - gather commands, and on Cmd, do something
-interpretCommand :: (MonadIO io) =>
-  (GTA.AppAction -> MaybeT STM ())
-  -> AppCommand
-  -> MaybeT io ()
-interpretCommand sendAction = process
- where
-  process QuitCommand = empty
-   -- default just show the command
-  process a = hoist (liftIO . atomically) $ sendAction (GTA.AppMessageAction . GTF.ModifyField $ \s ->
-                                                               s & GTA.messageText .~ T.pack (show a)
-                                                                 & GTA.messageIsTemporary .~ True)
+-- external effect processing
+interpretCommand
+    :: (MonadIO io)
+    => AppCommand -> MaybeT io ()
+interpretCommand = process
+  where
+    process QuitCommand = empty
 
 renderFrame' ::
   MonadIO m =>
@@ -421,7 +397,7 @@ exampleApp
     let appSignal' = appSignal (thresholdCrossedSignal' (StreamConfig input1 input2)) (gadgetSignal sendAction inputUi)
 
     -- finally run the main gui threads
-    s <- runUi refreshDelay appModel (interpretCommands sendAction) (renderFrame' sendAction ctls) appSignal'
+    s <- runUi refreshDelay appModel (traverse_ interpretCommand) (renderFrame' sendAction ctls) appSignal'
     liftIO $ print s
 
 -- | Stateful signal of commands after consuming an action Producer

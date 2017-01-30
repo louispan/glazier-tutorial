@@ -21,7 +21,7 @@ main = void $ GTC.exampleApp
     desired2
     threshold2
     interval2
-    (GTA.AppModel 5 (GTA.MessageModel "Hello, world!" True) (GTS.StreamModel Nothing Nothing [] Nothing))
+    (GTA.AppModel 5 "Hello, world!" (GTS.StreamModel Nothing Nothing [] Nothing))
  where
   interval1 = (500000, 1000000)
   start1 = D.Decimal 0 130
