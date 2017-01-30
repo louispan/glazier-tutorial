@@ -20,7 +20,6 @@ library
                      , Glazier.Tutorial.Console
                      , Glazier.Tutorial.Field
                      , Glazier.Tutorial.Random
-                     , Glazier.Tutorial.Stopwatch
                      , Glazier.Tutorial.StreamModel
   build-depends:       base >= 4.7 && < 5
                      , ansi-terminal >= 0.6 && < 1
@@ -32,7 +31,7 @@ library
                      , errors >= 2 && < 3
                      , extra >= 1.4 && < 2
                      , glazier >= 0.6.2 && < 1
-                     , glazier-pipes >= 0.1.1 && < 1
+                     , glazier-pipes >= 0.1.2 && < 1
                      , lens >= 4 && < 5
                      , mmorph >= 1 && < 2
                      , MonadRandom >= 0.4 && < 1
@@ -41,7 +40,7 @@ library
                      , pipes >= 4 && < 5
                      , pipes-concurrency >= 2 && < 3
                      , pipes-fluid >= 0.3 && < 1
-                     , pipes-misc >= 0.2 && < 1
+                     , pipes-misc >= 0.2.1.1 && < 1
                      , stm >= 2.4 && < 3
                      , stm-extras > 0.1 &&  < 1
                      , text >= 1 && < 2

@@ -46,6 +46,7 @@ import qualified Pipes.Concurrent as PC
 import qualified Pipes.Fluid.React as PFR
 import qualified Pipes.Lift as PL
 import qualified Pipes.Misc as PM
+import qualified Pipes.Prelude as PP
 -- import qualified Pipes.Prelude as PP
 import qualified System.Console.ANSI as ANSI
 import qualified System.IO as IO
@@ -394,97 +395,10 @@ exampleApp
         interpretControls sendAction ctls
 
     -- combine the stream signal with the gadget signal
-    let appSignal' = appSignal (thresholdCrossedSignal' (StreamConfig input1 input2)) (gadgetSignal sendAction inputUi)
+    let appSignal' = appSignal
+            (thresholdCrossedSignal' (StreamConfig input1 input2))
+            (GP.gadgetToProducer inputUi (appWidget sendAction ^. G.gadget))
 
     -- finally run the main gui threads
-    s <- runUi refreshDelay appModel (traverse_ interpretCommand) (renderFrame' sendAction ctls) appSignal'
+    s <- GP.runUi refreshDelay appModel (traverse_ interpretCommand) (renderFrame' sendAction ctls) appSignal'
     liftIO $ print s
-
--- | Stateful signal of commands after consuming an action Producer
--- TODO; move to common package
-gadgetSignal ::
-  (MonadState GTA.AppModel (t STM), MonadTrans t) =>
-  (GTA.AppAction -> ctl)
-  -> PC.Input GTA.AppAction
-  -> P.Producer [AppCommand] (t STM) ()
-gadgetSignal sendAction input = hoist lift (PM.fromInputSTM input) P.>-> GP.gadgetToPipe (appWidget sendAction ^. G.gadget)
-
--- | TODO: move to Pipes.Misc
-onState :: (MonadState s m) => (s -> m ()) -> P.Pipe a a m r
-onState f = P.for P.cat $ \a -> do
-    s <- get
-    lift $ f s
-    P.yield a
-
--- | This is similar to part of the Elm startApp.
--- This is responsible for running the glazier widget update tick until it quits.
--- This is also responsible for rendering the frame and interpreting commands.
--- TODO: move to Glazier.Pipes
-runUi :: (MonadIO io) =>
-     Int
-  -> s
-  -> (cmd -> MaybeT IO ()) -- interpretCmds
-  -> (s -> MaybeT IO ()) -- render
-  -> P.Producer cmd (StateT s STM) ()
-  -> io s
-runUi refreshDelay initialState interpretCmds render appSig
-    -- framerate thread
-    -- TMVar to indicate that the render thread can render, start non empty so we can render straight away.
- = do
-    triggerRender <- liftIO $ newTMVarIO ()
-    frameRateThread <-
-        liftIO $
-        forkIO . void . forever $
-        -- The will ensure a refreshDelay in between times when value in canRender is taken.
-        -- wait until canRender is empty (ie taken by the render thread)
-         do
-            atomically $ STE.waitTillEmptyTMVar triggerRender ()
-            -- if empty, then wait delay before filling TMVar with next canRender value
-            threadDelay refreshDelay
-            atomically $ putTMVar triggerRender ()
-
-    -- render thread
-    enableRenderThread <- liftIO $ newTMVarIO ()
-    finishedRenderThread <- liftIO newEmptyTMVarIO
-    latestState <- liftIO $ newTMVarIO initialState
-    void . liftIO $
-        forkFinally
-            (void . runMaybeT . forever $
-              -- check if we can start render
-              do
-                 liftIO . atomically . void $ takeTMVar triggerRender
-                 -- to allow rendering of last frame before quitting
-                 -- if there is no state to render, check if rendering is disabled
-                 s <-
-                     MaybeT . liftIO . atomically $
-                     (Just <$> takeTMVar latestState) `orElse` do
-                         r <- tryReadTMVar enableRenderThread
-                         case r of
-                             Nothing -> pure Nothing -- breaks (runMaybeT . forever) loop
-                             Just _ -> retry
-                 render s)
-            (const . atomically $ putTMVar finishedRenderThread ())
-    -- hoist to atomically apply the STM
-    -- then lift from StateT s IO -> MaybeT (StateT s IO)
-    s' <-
-        liftIO $
-        P.runEffect $
-        PL.execStateP initialState $
-        PL.runMaybeP $
-        -- hoist MaybeT STM -> MaybeT (StateT STM), then lift into the Pipe
-        P.for (hoist
-                  (lift . hoist (liftIO . atomically))
-                  (appSig P.>-> onState (void . lift . STE.forceSwapTMVar latestState))) $ \c ->
-            lift $ hoist lift (interpretCmds c)
-
-    -- cleanup
-    -- allow rendering of the frame one last time
-    liftIO . atomically $ takeTMVar enableRenderThread
-    -- wait for render thread to finish before exiting
-    liftIO . atomically $ takeTMVar finishedRenderThread
-    -- kill frameRateThread only after render thread has finished
-    -- since renderThread waits on triggers from frameRateThread
-    liftIO $ killThread frameRateThread
-    -- liftIO $ killThread ctlsThread
-    -- return final state
-    liftIO $ pure s'
