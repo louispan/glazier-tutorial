@@ -45,12 +45,15 @@ import qualified Pipes as P
 import qualified Pipes.Concurrent as PC
 import qualified Pipes.Fluid.React as PFR
 import qualified Pipes.Lift as PL
-import qualified Pipes.Misc as PM
+import qualified Pipes.Misc.Concurrent as PM
+import qualified Pipes.Misc.State.Strict as PM
+import qualified Pipes.Misc.Util as PM
 import qualified Pipes.Prelude as PP
 -- import qualified Pipes.Prelude as PP
 import qualified System.Console.ANSI as ANSI
 import qualified System.IO as IO
 -- import qualified System.Mem as SM
+import qualified Glazier.Pipes.Stopwatch as GPS
 
 data StreamConfig = StreamConfig
     { streamConfigStreamInput1 :: PC.Input D.Decimal
@@ -268,9 +271,6 @@ renderFrame' sendAction ctls s = do
     liftIO . atomically . void $ STE.forceSwapTMVar ctls ctls'
     liftIO $ renderFrame frame'
 
-counterToThresholdCommand :: GTA.HasCounterModel s GTC.CounterModel => s -> GTS.ThresholdCommand
-counterToThresholdCommand s = GTS.ThresholdSet . D.Decimal 0 . fromIntegral $ s ^. GTA.counterModel
-
 -- signal network
 mkSignal ::
   (MonadState s (t STM), MonadTrans t) =>
@@ -384,8 +384,12 @@ exampleApp
 
     -- threads for rendering and controlling UI
     (outputUi, inputUi) <- liftIO $ PC.spawn PC.unbounded
+
+    -- ticker
     let sendAction = (MaybeT . fmap guard) <$> PC.send outputUi
-    -- (outputStopwatch, inputStopwatch, sealStopwatch) <- liftIO $ PC.spawn' PC.unbounded
+    -- (outputStopwatch, inputStopwatch, sealStopwatch) <- liftIO $ PC.spawn' PC.bounded 1
+    -- void . liftIO . forkIO . void . forever . runMaybeT $
+    --     (PC.send outputStopwatch)
 
     -- controls thread
     -- continuously process user input using ctls until it fails (quit)
@@ -395,10 +399,17 @@ exampleApp
         interpretControls sendAction ctls
 
     -- combine the stream signal with the gadget signal
+    -- appSignalIO :: P.Producer [AppCommand] (StateT GTA.AppModel STM) ()
     let appSignal' = appSignal
             (thresholdCrossedSignal' (StreamConfig input1 input2))
             (GP.gadgetToProducer inputUi (appWidget sendAction ^. G.gadget))
+        -- combine the app signal with interpreting the command output
+        -- appSignalIO :: P.Producer [AppCommand] (MaybeT (StateT GTA.AppModel io)) ()
+        appSignalIO = hoist (lift . hoist (liftIO . atomically)) appSignal'
+        -- interpretCommandsConsumer :: P.Consumer [AppCommand] (MaybeT (StateT GTA.AppModel io)) ()
+        interpretCommandsConsumer = hoist (hoist lift) (PP.mapM_ (traverse_ interpretCommand))
+        appEffect = appSignalIO P.>-> interpretCommandsConsumer
 
     -- finally run the main gui threads
-    s <- GP.runUi refreshDelay appModel (traverse_ interpretCommand) (renderFrame' sendAction ctls) appSignal'
+    s <- GP.runUi refreshDelay (renderFrame' sendAction ctls) appModel appEffect
     liftIO $ print s

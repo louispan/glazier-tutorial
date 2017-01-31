@@ -25,9 +25,9 @@ instance GTC.AsCounterAction AppAction where
   _CounterAction = _AppCounterAction
 
 data AppModel = AppModel
-    { appModelCounterModel :: GTC.CounterModel
-    , appModelMessageModel :: T.Text
-    , appModelStreamModel :: GTS.StreamModel
+    { appModelCounterModel :: {-# UNPACK #-} !GTC.CounterModel
+    , appModelMessageModel :: {-# UNPACK #-} !T.Text
+    , appModelStreamModel :: {-# UNPACK #-} !GTS.StreamModel
     } deriving (Show)
 
 makeFields ''AppModel
