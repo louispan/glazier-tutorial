@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -funbox-strict-fields #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -9,8 +10,7 @@ import Control.Lens
 import Control.Monad.State.Strict
 import qualified Data.Decimal as D
 import Data.Maybe
-import qualified Glazier as G
-import qualified Glazier.Strict as G
+import qualified Glazier.Gadget.Strict as G
 
 data CrossedDirection = CrossedUpwards | CrossedDownwards
   deriving (Eq, Show)
@@ -40,10 +40,11 @@ thresholdGadget f = G.Gadget $ do
 -- make access and update logic clearer.
 data StreamModel =
   StreamModel
-  { streamModelSignal1               :: Maybe D.Decimal
-  , streamModelSignal2               :: Maybe D.Decimal
-  , streamModelRatioOfSignals        :: [D.Decimal]
-  , streamModelRatioThresholdCrossed :: Maybe CrossedDirection
+  { streamModelSignal1               :: !(Maybe D.Decimal)
+  , streamModelSignal2               :: !(Maybe D.Decimal)
+  , streamModelRatioOfSignals        :: ![D.Decimal]
+  , streamModelRatioThresholdCrossed :: !(Maybe CrossedDirection)
+  , streamModelRatioThresholdCrossedPin :: {-# UNPACK #-} !D.Decimal -- When zero, RatioThresholdCrossed is allowed to be Nothing
   } deriving (Eq, Show)
 
 makeFields ''StreamModel

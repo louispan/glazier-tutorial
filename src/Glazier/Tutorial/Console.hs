@@ -1,20 +1,19 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE FunctionalDependencies #-}
 
 module Glazier.Tutorial.Console where
 
--- import Control.Monad.Trans.Identity
 import Control.Applicative
 import Control.Concurrent
--- import Control.Concurrent.MVar
+import qualified Control.Concurrent.Async.Lifted.Safe as A
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TMVar.Extras as STE
 import Control.Exception (bracket)
@@ -24,18 +23,19 @@ import Control.Monad.Except
 import Control.Monad.Morph
 import Control.Monad.Reader
 import Control.Monad.State.Strict
+import Control.Monad.Trans.Control
 import Control.Monad.Trans.Maybe
--- import qualified Control.Monad.Trans.State.Strict.Extras as SE
--- import qualified Control.Monad.Trans.Reader.Extras as RE
+import Data.Constraint.Forall (Forall)
 import qualified Data.Decimal as D
 import Data.Foldable
 import Data.List (intersperse)
 import qualified Data.Map.Monoidal.Strict as MM
 import qualified Data.Map.Strict as M
+import Data.Maybe
 import qualified Data.Text as T
 import qualified Glazier as G
-import qualified Glazier.Strict as G
 import qualified Glazier.Pipes.Strict as GP
+import qualified Glazier.Pipes.Ui as GP
 import qualified Glazier.Tutorial.App as GTA
 import qualified Glazier.Tutorial.Counter as GTC
 import qualified Glazier.Tutorial.Field as GTF
@@ -43,17 +43,16 @@ import qualified Glazier.Tutorial.Random as GTR
 import qualified Glazier.Tutorial.StreamModel as GTS
 import qualified Pipes as P
 import qualified Pipes.Concurrent as PC
-import qualified Pipes.Fluid.React as PFR
+import qualified Pipes.Fluid as PF
 import qualified Pipes.Lift as PL
 import qualified Pipes.Misc.Concurrent as PM
 import qualified Pipes.Misc.State.Strict as PM
+import qualified Pipes.Misc.Time as PM
 import qualified Pipes.Misc.Util as PM
 import qualified Pipes.Prelude as PP
--- import qualified Pipes.Prelude as PP
+import qualified System.Clock as C
 import qualified System.Console.ANSI as ANSI
 import qualified System.IO as IO
--- import qualified System.Mem as SM
-import qualified Glazier.Pipes.Stopwatch as GPS
 
 data StreamConfig = StreamConfig
     { streamConfigStreamInput1 :: PC.Input D.Decimal
@@ -194,15 +193,21 @@ ratioThresholdCrossedWindow ::
   G.Window m s (Frontend ctrl Rendering)
 ratioThresholdCrossedWindow = fieldWindow $ \s -> "Crossed?: " `T.append` (T.pack . show $ s ^. GTS.ratioThresholdCrossed)
 
+ratioThresholdCrossedPinWindow ::
+  (GTS.HasRatioThresholdCrossedPin s D.Decimal, Applicative m) =>
+  G.Window m s (Frontend ctrl Rendering)
+ratioThresholdCrossedPinWindow = fieldWindow $ \s -> "CrossedPin: " `T.append` (T.pack . show $ s ^. GTS.ratioThresholdCrossedPin)
+
 signalsWindow ::
   (GTS.HasRatioOfSignals s [D.Decimal],
    GTS.HasRatioThresholdCrossed s a,
-   GTS.HasSignal1 s (f (D.DecimalRaw i)),
-   GTS.HasSignal2 s (f1 (D.DecimalRaw i1)), Applicative m,
-   Show (f1 (D.DecimalRaw i1)), Show (f (D.DecimalRaw i)), Show a,
-   Functor f1, Functor f, Integral i1, Integral i) =>
+   GTS.HasRatioThresholdCrossedPin s D.Decimal,
+   GTS.HasSignal1 s (f D.Decimal),
+   GTS.HasSignal2 s (f1 D.Decimal), Applicative m,
+   Show (f1 D.Decimal), Show (f D.Decimal), Show a,
+   Functor f1, Functor f) =>
   G.Window m s (MM.MonoidalMap Char [ctrl], [Rendering])
-signalsWindow = foldMap id $ intersperse newlineWindow[signal1Window, signal2Window, ratioWindow, ratioThresholdCrossedWindow]
+signalsWindow = foldMap id $ intersperse newlineWindow[signal1Window, signal2Window, ratioWindow, ratioThresholdCrossedWindow, ratioThresholdCrossedPinWindow]
 
 signalsWidget ::
   (GTA.HasStreamModel s GTS.StreamModel, GTA.AsAppAction a,
@@ -288,7 +293,7 @@ ratioSignal
        , Fractional a
        )
     => cfg -> P.Producer a (t STM) ()
-ratioSignal c = PFR.reactively $ (/) <$> PFR.React (mkSignal GTS.signal1 (c ^. streamInput1)) <*> PFR.React (mkSignal GTS.signal2 (c ^. streamInput2))
+ratioSignal c = PF.reactively $ (/) <$> PF.React (mkSignal GTS.signal1 (c ^. streamInput1)) <*> PF.React (mkSignal GTS.signal2 (c ^. streamInput2))
 
 ratiosSignal' ::
   (HasStreamInput1 cfg (PC.Input b),
@@ -315,30 +320,48 @@ thresholdCrossedSignal' ::
    HasStreamInput2 cfg (PC.Input D.Decimal),
    GTS.HasRatioOfSignals s [D.Decimal],
    GTS.HasRatioThresholdCrossed s (Maybe GTS.CrossedDirection),
+   GTS.HasRatioThresholdCrossedPin s D.Decimal,
    GTS.HasSignal1 s (Maybe D.Decimal),
    GTS.HasSignal2 s (Maybe D.Decimal), MonadState s (t STM),
    MonadTrans t, Alternative (t STM)) =>
   cfg -> P.Producer (Maybe GTS.CrossedDirection) (t STM) ()
 thresholdCrossedSignal' c = ratiosSignal' c P.>-> thresholdCrossedPipe
-  P.>-> PM.store id GTS.ratioThresholdCrossed
+    -- only set ratioThresholdCrossed to Nothing iff
+    -- ratioThresholdCrossedPin is 0
+    P.>-> P.for P.cat go
+  where
+    go a = do
+        if isNothing a
+           then do
+               p <- use GTS.ratioThresholdCrossedPin
+               if p <= D.Decimal 0 0
+                  then GTS.ratioThresholdCrossed .= a -- Nothing
+                  else pure ()
+           else do
+               GTS.ratioThresholdCrossed .= a
+               GTS.ratioThresholdCrossedPin .= D.Decimal 0 1
+        P.yield a
 
 -- | Reactively combine the streamModel signal and the gui Signal
 -- Then interpret the resulting command to create an io effect
 appSignal :: (Alternative (t STM), MonadState s (t STM)) => P.Producer b (t STM) ()
     -> P.Producer [c] (t STM) ()
     -> P.Producer [c] (t STM) ()
-appSignal bs cs = PFR.reactively $ (\bc -> go bc) <$> (PFR.React bs `PFR.merge` PFR.React cs)
+appSignal bs cs = PF.reactively $ (\bc -> go bc) <$> (PF.React bs `PF.merge` PF.React cs)
   where
     -- In this app, we don't care about the output of the streamModelSignal, just the state effects
-    go (Left (_, c)) = c
-    go (Right (Left _)) = []
-    go (Right (Right (_, c))) = c
+    go (PF.RightOnly _ c) = c
+    go (PF.LeftOnly _ _) = []
+    go (PF.Coupled _ _ c) = c
 
 -- | This is similar to part of the Elm startApp.
 -- This is responsible for setting up the external signal network before running
 -- the glazier widget framework using 'runUi'.
-exampleApp :: MonadIO io =>
-     Int
+exampleApp ::
+  (MonadBaseControl IO io, Forall (A.Pure io),
+   MonadIO io) =>
+  Int
+  -> Int
   -> D.Decimal
   -> D.Decimal
   -> D.Decimal
@@ -352,6 +375,7 @@ exampleApp :: MonadIO io =>
   -> GTA.AppModel
   -> io ()
 exampleApp
+  animationDelay
   refreshDelay
   start1
   tick1
@@ -386,16 +410,16 @@ exampleApp
     (outputUi, inputUi) <- liftIO $ PC.spawn PC.unbounded
 
     -- ticker
-    let sendAction = (MaybeT . fmap guard) <$> PC.send outputUi
-    -- (outputStopwatch, inputStopwatch, sealStopwatch) <- liftIO $ PC.spawn' PC.bounded 1
-    -- void . liftIO . forkIO . void . forever . runMaybeT $
-    --     (PC.send outputStopwatch)
+    let sendAction = PM.toOutputMaybeT outputUi
+        -- (outputStopwatch, inputStopwatch, sealStopwatch) <- liftIO $ PC.spawn' PC.bounded 1
+        -- void . liftIO . forkIO . void . forever . runMaybeT $
+        --     (PC.send outputStopwatch)
 
     -- controls thread
     -- continuously process user input using ctls until it fails (quit)
     -- pushs actions into update thread
     ctls <- liftIO newEmptyTMVarIO
-    void . liftIO . forkIO . void . withNoBuffering . runMaybeT . forever $
+    ctlsThread <- liftIO . forkIO . void . withNoBuffering . runMaybeT . forever $
         interpretControls sendAction ctls
 
     -- combine the stream signal with the gadget signal
@@ -406,10 +430,46 @@ exampleApp
         -- combine the app signal with interpreting the command output
         -- appSignalIO :: P.Producer [AppCommand] (MaybeT (StateT GTA.AppModel io)) ()
         appSignalIO = hoist (lift . hoist (liftIO . atomically)) appSignal'
-        -- interpretCommandsConsumer :: P.Consumer [AppCommand] (MaybeT (StateT GTA.AppModel io)) ()
-        interpretCommandsConsumer = hoist (hoist lift) (PP.mapM_ (traverse_ interpretCommand))
-        appEffect = appSignalIO P.>-> interpretCommandsConsumer
+        -- interpretCommandsPipe :: P.Pipe [AppCommand] () (MaybeT (StateT GTA.AppModel io)) ()
+        interpretCommandsPipe = PP.mapM (hoist lift . traverse_ interpretCommand)
+        -- also in order to combine with ReactiveIO (which doesn't work on top of StateT)
+        -- run the MaybeT (StateT) in appSignal and into just MonadIO
+        -- and convert to a Producer of AppModel
+        -- appSignalIO' :: P.Producer GTA.AppModel io GTA.AppModel
+        appSignalIO' =
+            PL.execStateP appModel $
+            PL.runMaybeP $
+            appSignalIO P.>-> interpretCommandsPipe P.>-> PM.retrieve' id
 
-    -- finally run the main gui threads
-    s <- GP.runUi refreshDelay (renderFrame' sendAction ctls) appModel appEffect
+        timer = PM.always () P.>-> PM.delay' animationDelay P.>-> PM.ticker C.Monotonic P.>-> PM.diffTime
+        appSignalIO'' = PF.reactivelyIO (PF.ReactIO (void appSignalIO') `PF.mergeIO` PF.ReactIO timer)
+        appSignalIO''' = appSignalIO'' P.>-> PP.takeWhile PF.isBothLive P.>-> adjustPinning
+
+        appSignalIO'''' = PM.lastOr appModel appSignalIO'''
+
+    -- -- finally run the main gui threads
+    -- s <- GP.runUi refreshDelay (renderFrame' sendAction ctls) appSignalIO'''
+    -- FIXME: want to when timer is stopped
+    s <- GP.runUi refreshDelay (renderFrame' sendAction ctls) appSignalIO''''
+    liftIO $ killThread ctlsThread
     liftIO $ print s
+
+adjustPinning ::
+  (Monad m,
+   GTS.HasRatioThresholdCrossedPin s D.Decimal) =>
+  P.Pipe(PF.Merged s C.TimeSpec) s m ()
+adjustPinning = go
+  where
+    go = do
+        a <- P.await
+        case a of
+            PF.RightOnly _ _ -> go
+            PF.LeftOnly _ s -> do
+                P.yield s
+                go
+            PF.Coupled _ s d -> do
+                P.yield $ s & GTS.ratioThresholdCrossedPin %~ (\p ->
+                    if p > D.Decimal 0 0
+                       then max (D.Decimal 0 0) (p - D.Decimal 9 (C.toNanoSecs d))
+                       else p)
+                go

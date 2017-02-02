@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -funbox-strict-fields #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -25,9 +26,9 @@ instance GTC.AsCounterAction AppAction where
   _CounterAction = _AppCounterAction
 
 data AppModel = AppModel
-    { appModelCounterModel :: {-# UNPACK #-} !GTC.CounterModel
-    , appModelMessageModel :: {-# UNPACK #-} !T.Text
-    , appModelStreamModel :: {-# UNPACK #-} !GTS.StreamModel
+    { appModelCounterModel :: !GTC.CounterModel
+    , appModelMessageModel :: !T.Text
+    , appModelStreamModel :: !GTS.StreamModel
     } deriving (Show)
 
 makeFields ''AppModel
@@ -52,3 +53,6 @@ instance HasThreshold GTC.CounterModel D.Decimal where
 
 instance HasThreshold AppModel D.Decimal where
     threshold = counterModel . threshold
+
+instance GTS.HasRatioThresholdCrossedPin AppModel D.Decimal where
+    ratioThresholdCrossedPin = streamModel . GTS.ratioThresholdCrossedPin

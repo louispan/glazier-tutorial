@@ -5,7 +5,7 @@ module Glazier.Tutorial.Counter where
 import Control.Lens
 import Control.Monad.Reader
 import Control.Monad.State.Strict
-import qualified Glazier.Strict as G
+import qualified Glazier.Gadget.Strict as G
 import qualified Math.NumberTheory.Logarithms as Math
 
 type CounterModel = Int
