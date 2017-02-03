@@ -15,7 +15,8 @@ import qualified Glazier.Tutorial.Field as GTF
 import qualified Glazier.Tutorial.StreamModel as GTS
 
 data AppAction =
-  QuitAction
+  QuittingAction
+  | QuitAction
   | AppCounterAction GTC.CounterAction
   | AppMessageAction (GTF.FieldAction T.Text)
   | SetStreamModel (GTF.FieldAction GTS.StreamModel)

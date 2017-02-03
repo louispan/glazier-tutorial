@@ -63,6 +63,7 @@ makeFields ''StreamConfig
 -- | Widget update command
 data AppCommand
     = AppCounterCommand GTC.CounterCommand
+    | QuittingCommand
     | QuitCommand
 
 -- | Rendering instruction
@@ -104,15 +105,16 @@ quitWidget sendAction =
     G.Widget
         (G.Window $
          pure
-             ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuitAction]
+             ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuittingAction]
              , [DisplayText "Press 'q' to quit"]))
         (G.Gadget $ do
              a <- ask
              lift $
                  case a of
-                     GTA.QuitAction -> do
+                     GTA.QuitAction -> pure [QuitCommand] -- quit immediately
+                     GTA.QuittingAction -> do
                          GTA.messageModel .= "Quitting"
-                         pure [QuitCommand]
+                         pure [QuittingCommand]
                      _ -> pure [])
 
 messageWidget ::
@@ -262,10 +264,11 @@ withNoBuffering action =
 -- external effect processing
 interpretCommand
     :: (MonadIO io)
-    => AppCommand -> MaybeT io ()
-interpretCommand = process
+    =>   (GTA.AppAction -> MaybeT io ()) -> AppCommand -> MaybeT io ()
+interpretCommand sendAction = process
   where
     process QuitCommand = empty
+    process QuittingCommand = sendAction GTA.QuitAction
 
 renderFrame' ::
   MonadIO m =>
@@ -406,6 +409,7 @@ exampleApp
     -- threads for rendering and controlling UI
     (outputUi, inputUi) <- liftIO $ PC.spawn PC.unbounded
     let sendAction = PM.toOutputMaybeT outputUi
+        sendActionIO = hoist (liftIO . atomically) . sendAction
 
     -- controls thread
     -- continuously process user input using ctls until it fails (quit)
@@ -430,7 +434,7 @@ exampleApp
         -- appSignalIO :: P.Producer [AppCommand] (MaybeT (StateT GTA.AppModel io)) ()
         appSignalIO = hoist (lift . hoist (liftIO . atomically)) appSignal
         -- interpretCommandsPipe :: P.Pipe [AppCommand] () (MaybeT (StateT GTA.AppModel io)) ()
-        interpretCommandsPipe = PP.mapM (hoist lift . traverse_ interpretCommand)
+        interpretCommandsPipe = PP.mapM (hoist lift . traverse_ (interpretCommand sendActionIO))
 
         -- run the MaybeT (StateT) in appSignal and into just MonadIO
         -- and convert to a Producer of AppModel
