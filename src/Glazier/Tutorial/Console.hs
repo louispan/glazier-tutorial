@@ -342,17 +342,14 @@ thresholdCrossedSignal' c = ratiosSignal' c P.>-> thresholdCrossedPipe
                GTS.ratioThresholdCrossedPin .= D.Decimal 0 1
         P.yield a
 
--- | Reactively combine the streamModel signal and the gui Signal
--- Then interpret the resulting command to create an io effect
-appSignal :: (Alternative (t STM), MonadState s (t STM)) => P.Producer b (t STM) ()
-    -> P.Producer [c] (t STM) ()
-    -> P.Producer [c] (t STM) ()
-appSignal bs cs = PF.reactively $ (\bc -> go bc) <$> (PF.React bs `PF.merge` PF.React cs)
-  where
-    -- In this app, we don't care about the output of the streamModelSignal, just the state effects
-    go (PF.RightOnly _ c) = c
-    go (PF.LeftOnly _ _) = []
-    go (PF.Coupled _ _ c) = c
+-- | convert the stream of delta time, to a stream of pin state changes due to the time
+animatePin :: (MonadState s (t STM), GTS.HasRatioThresholdCrossedPin s D.Decimal) => P.Pipe C.TimeSpec C.TimeSpec (t STM) r
+animatePin = P.for P.cat $ \d -> do
+    GTS.ratioThresholdCrossedPin %= (\p ->
+                    if p > D.Decimal 0 0
+                       then max (D.Decimal 0 0) (p - D.Decimal 9 (C.toNanoSecs d))
+                       else p)
+    P.yield d
 
 -- | This is similar to part of the Elm startApp.
 -- This is responsible for setting up the external signal network before running
@@ -408,12 +405,7 @@ exampleApp
 
     -- threads for rendering and controlling UI
     (outputUi, inputUi) <- liftIO $ PC.spawn PC.unbounded
-
-    -- ticker
     let sendAction = PM.toOutputMaybeT outputUi
-        -- (outputStopwatch, inputStopwatch, sealStopwatch) <- liftIO $ PC.spawn' PC.bounded 1
-        -- void . liftIO . forkIO . void . forever . runMaybeT $
-        --     (PC.send outputStopwatch)
 
     -- controls thread
     -- continuously process user input using ctls until it fails (quit)
@@ -422,17 +414,24 @@ exampleApp
     ctlsThread <- liftIO . forkIO . void . withNoBuffering . runMaybeT . forever $
         interpretControls sendAction ctls
 
-    -- combine the stream signal with the gadget signal
-    -- appSignalIO :: P.Producer [AppCommand] (StateT GTA.AppModel STM) ()
-    let appSignal' = appSignal
-            (thresholdCrossedSignal' (StreamConfig input1 input2))
-            (GP.gadgetToProducer inputUi (appWidget sendAction ^. G.gadget))
+    -- ticker
+    let timer = PM.always () P.>-> PM.delay' animationDelay P.>-> PM.ticker C.Monotonic P.>-> PM.diffTime
+    timerSTM <- liftIO $ PM.mkProducerSTM (PC.bounded 100) timer
+    let animation = hoist lift timerSTM P.>-> animatePin
+
+    -- combine the stream signal and animation effects
+    let streamReact = (\_ _ -> ()) <$> PF.React (thresholdCrossedSignal' (StreamConfig input1 input2)) <*> PF.React animation
+        gadgetReact = PF.React $ GP.gadgetToProducer inputUi (appWidget sendAction ^. G.gadget)
+        -- appSignalIO :: P.Producer [AppCommand] (StateT GTA.AppModel STM) ()
+        -- combine the stream effects with the gadget signal, keeping only the yields from gadget signal
+        appSignal = PF.reactively $ fromMaybe mempty . PF.discreteLeft <$> (gadgetReact `PF.merge` streamReact)
+
         -- combine the app signal with interpreting the command output
         -- appSignalIO :: P.Producer [AppCommand] (MaybeT (StateT GTA.AppModel io)) ()
-        appSignalIO = hoist (lift . hoist (liftIO . atomically)) appSignal'
+        appSignalIO = hoist (lift . hoist (liftIO . atomically)) appSignal
         -- interpretCommandsPipe :: P.Pipe [AppCommand] () (MaybeT (StateT GTA.AppModel io)) ()
         interpretCommandsPipe = PP.mapM (hoist lift . traverse_ interpretCommand)
-        -- also in order to combine with ReactiveIO (which doesn't work on top of StateT)
+
         -- run the MaybeT (StateT) in appSignal and into just MonadIO
         -- and convert to a Producer of AppModel
         -- appSignalIO' :: P.Producer GTA.AppModel io GTA.AppModel
@@ -441,35 +440,7 @@ exampleApp
             PL.runMaybeP $
             appSignalIO P.>-> interpretCommandsPipe P.>-> PM.retrieve' id
 
-        timer = PM.always () P.>-> PM.delay' animationDelay P.>-> PM.ticker C.Monotonic P.>-> PM.diffTime
-        appSignalIO'' = PF.reactivelyIO (PF.ReactIO (void appSignalIO') `PF.mergeIO` PF.ReactIO timer)
-        appSignalIO''' = appSignalIO'' P.>-> PP.takeWhile PF.isBothLive P.>-> adjustPinning
-
-        appSignalIO'''' = PM.lastOr appModel appSignalIO'''
-
-    -- -- finally run the main gui threads
-    -- s <- GP.runUi refreshDelay (renderFrame' sendAction ctls) appSignalIO'''
-    -- FIXME: want to when timer is stopped
-    s <- GP.runUi refreshDelay (renderFrame' sendAction ctls) appSignalIO''''
+    -- finally run the main gui threads
+    s <- GP.runUi refreshDelay (renderFrame' sendAction ctls) appSignalIO'
     liftIO $ killThread ctlsThread
     liftIO $ print s
-
-adjustPinning ::
-  (Monad m,
-   GTS.HasRatioThresholdCrossedPin s D.Decimal) =>
-  P.Pipe(PF.Merged s C.TimeSpec) s m ()
-adjustPinning = go
-  where
-    go = do
-        a <- P.await
-        case a of
-            PF.RightOnly _ _ -> go
-            PF.LeftOnly _ s -> do
-                P.yield s
-                go
-            PF.Coupled _ s d -> do
-                P.yield $ s & GTS.ratioThresholdCrossedPin %~ (\p ->
-                    if p > D.Decimal 0 0
-                       then max (D.Decimal 0 0) (p - D.Decimal 9 (C.toNanoSecs d))
-                       else p)
-                go
