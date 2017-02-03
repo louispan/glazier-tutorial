@@ -6,17 +6,9 @@ resolver: nightly-2017-01-31
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
-- '/Users/louis/repo/haskell/pipes-misc'
-- '/Users/louis/repo/haskell/glazier-pipes'
-- '/Users/louis/repo/haskell/pipes-fluid'
-- '/Users/louis/repo/haskell/glazier'
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
-extra-deps:
-- glazier-0.7.0.0
-- pipes-fluid-0.3.1.0
-- stm-extras-0.1.0.0
-- pipes-category-0.2.0.0
+extra-deps: []
 
 # Override default flag values for local packages and extra-deps
 flags: {}
