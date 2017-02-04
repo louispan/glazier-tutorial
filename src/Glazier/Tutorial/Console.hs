@@ -296,7 +296,7 @@ ratioSignal
        , Fractional a
        )
     => cfg -> P.Producer a (t STM) ()
-ratioSignal c = PF.reactively $ (/) <$> PF.React (mkSignal GTS.signal1 (c ^. streamInput1)) <*> PF.React (mkSignal GTS.signal2 (c ^. streamInput2))
+ratioSignal c = PF.impulsively $ (/) <$> PF.Impulse (mkSignal GTS.signal1 (c ^. streamInput1)) <*> PF.Impulse (mkSignal GTS.signal2 (c ^. streamInput2))
 
 ratiosSignal' ::
   (HasStreamInput1 cfg (PC.Input b),
@@ -424,11 +424,11 @@ exampleApp
     let animation = hoist lift timerSTM P.>-> animatePin
 
     -- combine the stream signal and animation effects
-    let streamReact = (\_ _ -> ()) <$> PF.React (thresholdCrossedSignal' (StreamConfig input1 input2)) <*> PF.React animation
-        gadgetReact = PF.React $ GP.gadgetToProducer inputUi (appWidget sendAction ^. G.gadget)
+    let streamImpulse = (\_ _ -> ()) <$> PF.Impulse (thresholdCrossedSignal' (StreamConfig input1 input2)) <*> PF.Impulse animation
+        gadgetImpulse = PF.Impulse $ GP.gadgetToProducer inputUi (appWidget sendAction ^. G.gadget)
         -- appSignalIO :: P.Producer [AppCommand] (StateT GTA.AppModel STM) ()
         -- combine the stream effects with the gadget signal, keeping only the yields from gadget signal
-        appSignal = PF.reactively $ fromMaybe mempty . PF.discreteLeft <$> (gadgetReact `PF.merge` streamReact)
+        appSignal = PF.impulsively $ fromMaybe mempty . PF.discreteLeft <$> (gadgetImpulse `PF.merge` streamImpulse)
 
         -- combine the app signal with interpreting the command output
         -- appSignalIO :: P.Producer [AppCommand] (MaybeT (StateT GTA.AppModel io)) ()
