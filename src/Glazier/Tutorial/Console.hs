@@ -63,7 +63,7 @@ makeFields ''StreamConfig
 -- | Widget update command
 data AppCommand
     = AppCounterCommand GTC.CounterCommand
-    | QuittingCommand
+    | AppActionCommand GTA.AppAction
     | QuitCommand
 
 -- | Rendering instruction
@@ -80,7 +80,7 @@ counterWindow txt = review G._Window $ \n -> pure (mempty, [DisplayText . T.appe
 
 counterButtonWindow
   :: Applicative m => (GTC.CounterAction -> ctl) -> Char -> T.Text -> GTC.CounterAction -> G.Window m GTC.CounterModel (Frontend ctl Rendering)
-counterButtonWindow sendAction c txt action = review G._Window $ \ n -> pure (view (from _Wrapped') $ M.singleton c [control n], [render txt])
+counterButtonWindow sendAction c txt action = review G._Window $ \ n -> pure (view (from _Wrapped') $ M.singleton c [ctl n], [render txt])
   where
     render = DisplayText
     -- NB. Although it's possible to have different control behaviour based on the state
@@ -89,7 +89,7 @@ counterButtonWindow sendAction c txt action = review G._Window $ \ n -> pure (vi
     -- If processing was held up, and there was a backlog of decrements.
     -- all the decrements fired will be large decrements, instead of slowly smaller decrements.
     -- It is much safer to have stateful logic in the `Gadget`, instead of the `Window`.
-    control = const $ sendAction action
+    ctl = const $ sendAction action
 
 fieldWindow :: Applicative m => (a -> T.Text) -> G.Window m a (Frontend ctrl Rendering)
 fieldWindow f = review G._Window $ \msg -> pure
@@ -111,10 +111,10 @@ quitWidget sendAction =
              a <- ask
              lift $
                  case a of
-                     GTA.QuitAction -> pure [QuitCommand] -- quit immediately
                      GTA.QuittingAction -> do
                          GTA.messageModel .= "Quitting"
-                         pure [QuittingCommand]
+                         pure [AppActionCommand GTA.QuitAction]
+                     GTA.QuitAction -> pure [QuitCommand] -- quit immediately
                      _ -> pure [])
 
 messageWidget ::
@@ -268,7 +268,8 @@ interpretCommand
 interpretCommand sendAction = process
   where
     process QuitCommand = empty
-    process QuittingCommand = sendAction GTA.QuitAction
+    process (AppActionCommand a) = sendAction a
+    process (AppCounterCommand c) = liftIO $ print c
 
 renderFrame' ::
   MonadIO m =>
