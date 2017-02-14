@@ -100,7 +100,7 @@ fieldWindow f = review G._Window $ \msg -> pure
       else pure . DisplayText $ msg'
     )
 
-quitWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget GTA.AppModel (Frontend ctl Rendering) m GTA.AppAction [AppCommand]
+quitWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget m GTA.AppModel (Frontend ctl Rendering) m GTA.AppAction [AppCommand]
 quitWidget sendAction =
     G.Widget
         (G.Window $
@@ -119,7 +119,7 @@ quitWidget sendAction =
 
 messageWidget ::
   (GTA.HasMessageModel s T.Text, GTA.AsAppAction a, Monad m) =>
-  G.Widget s (MM.MonoidalMap Char [ctrl], [Rendering]) m a [r]
+  G.Widget m s (MM.MonoidalMap Char [ctrl], [Rendering]) m a [r]
 messageWidget =  G.implant GTA.messageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
     (fieldWindow (\s -> (T.append "Message: " s)))
     GTF.fieldGadget
@@ -136,7 +136,7 @@ counterWidget ::
   (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m) =>
   (GTC.CounterAction -> ctl)
   -> G.Widget
-       s (MM.MonoidalMap Char [ctl], [Rendering]) m a [GTC.CounterCommand]
+       m s (MM.MonoidalMap Char [ctl], [Rendering]) m a [GTC.CounterCommand]
 counterWidget sendAction' = G.implant GTA.counterModel $ G.dispatch GTC._CounterAction $
    G.Widget
     -- NB. Don't have a counterButtonGadget per buttonWindow - that will mean
@@ -153,13 +153,14 @@ counterWidget' ::
   (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m) =>
   (GTC.CounterAction -> ctl)
   -> G.Widget
-       s (MM.MonoidalMap Char [ctl], [Rendering]) m a [AppCommand]
+       m s (MM.MonoidalMap Char [ctl], [Rendering]) m a [AppCommand]
 counterWidget' sendAction' = fmap AppCounterCommand <$> (counterWidget sendAction')
 
 menuWidget ::
   Monad m =>
   (GTA.AppAction -> ctl)
   -> G.Widget
+       m
        GTA.AppModel
        (MM.MonoidalMap Char [ctl], [Rendering])
        m
@@ -170,7 +171,7 @@ menuWidget sendAction = foldMap id $ intersperse (G.statically spaceWindow) [cou
 
 counterDisplayWidget ::
   (GTA.HasCounterModel s Int, Monoid c, Monad m) =>
-  G.Widget s (MM.MonoidalMap Char [ctrl], [Rendering]) m a c
+  G.Widget m s (MM.MonoidalMap Char [ctrl], [Rendering]) m a c
 counterDisplayWidget = G.implant GTA.counterModel $ G.statically $ counterWindow "Current count is: "
 
 signal1Window ::
@@ -214,10 +215,10 @@ signalsWindow = foldMap id $ intersperse newlineWindow[signal1Window, signal2Win
 signalsWidget ::
   (GTA.HasStreamModel s GTS.StreamModel, GTA.AsAppAction a,
    Monad m) =>
-  G.Widget s (MM.MonoidalMap Char [ctrl], [Rendering]) m a [r]
+  G.Widget m s (MM.MonoidalMap Char [ctrl], [Rendering]) m a [r]
 signalsWidget = G.implant GTA.streamModel $ G.dispatch (GTA._SetStreamModel . GTF._FieldAction) $ G.Widget signalsWindow GTF.fieldGadget
 
-appWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget GTA.AppModel (Frontend ctl Rendering) m GTA.AppAction [AppCommand]
+appWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget m GTA.AppModel (Frontend ctl Rendering) m GTA.AppAction [AppCommand]
 appWidget sendAction = foldMap id $
     intersperse (G.statically newlineWindow)
     [ G.statically newlineWindow
@@ -276,7 +277,7 @@ renderFrame' ::
   (GTA.AppAction -> ctl)
   -> TMVar (MM.MonoidalMap Char [ctl]) -> GTA.AppModel -> m ()
 renderFrame' sendAction ctls s = do
-    (ctls', frame') <- view (G.window . G._Window) (appWidget sendAction) s
+    (ctls', frame') <- view (G._window . G._Window) (appWidget sendAction) s
     liftIO . atomically . void $ STE.forceSwapTMVar ctls ctls'
     liftIO $ renderFrame frame'
 
@@ -426,7 +427,7 @@ exampleApp
 
     -- combine the stream signal and animation effects
     let streamImpulse = (\_ _ -> ()) <$> PF.Impulse (thresholdCrossedSignal' (StreamConfig input1 input2)) <*> PF.Impulse animation
-        gadgetImpulse = PF.Impulse $ GP.gadgetToProducer inputUi (appWidget sendAction ^. G.gadget)
+        gadgetImpulse = PF.Impulse $ GP.gadgetToProducer inputUi (appWidget sendAction ^. G._gadget)
         -- appSignalIO :: P.Producer [AppCommand] (StateT GTA.AppModel STM) ()
         -- combine the stream effects with the gadget signal, keeping only the yields from gadget signal
         appSignal = PF.impulsively $ fromMaybe mempty . PF.discreteLeft <$> (gadgetImpulse `PF.merge` streamImpulse)
