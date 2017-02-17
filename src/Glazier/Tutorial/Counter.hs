@@ -5,7 +5,7 @@ module Glazier.Tutorial.Counter where
 import Control.Lens
 import Control.Monad.Reader
 import Control.Monad.State.Strict
-import qualified Glazier.Gadget.Strict as G
+import qualified Glazier.Gadget as G
 import qualified Math.NumberTheory.Logarithms as Math
 
 type CounterModel = Int
@@ -24,8 +24,8 @@ data CounterCommand = UpperBoundsExceeded | LowerBoundsExceeded
 -- Otherwise, if processing it held up, you may get multiple "IncrementBy LargeNumber"
 -- which is not expected behaviour.
 -- Alternatively, consider changing the Action to be idempotent (eg only @SetCount Int@).
-counterButtonGadget :: Monad m => Int -> G.Gadget CounterModel m CounterAction [CounterCommand]
-counterButtonGadget b = G.Gadget $ do
+counterButtonGadget :: Monad m => Int -> G.GadgetT CounterAction CounterModel m [CounterCommand]
+counterButtonGadget b = G.GadgetT $ do
   a <- ask
   case a of
     ResetCount -> do

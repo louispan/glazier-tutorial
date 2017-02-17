@@ -1,3 +1,4 @@
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -32,9 +33,9 @@ import Data.List (intersperse)
 import qualified Data.Map.Monoidal.Strict as MM
 import qualified Data.Map.Strict as M
 import Data.Maybe
+import Data.Semigroup
 import qualified Data.Text as T
 import qualified Glazier as G
-import qualified Glazier.Pipes.Strict as GP
 import qualified Glazier.Pipes.Ui as GP
 import qualified Glazier.Tutorial.App as GTA
 import qualified Glazier.Tutorial.Counter as GTC
@@ -75,12 +76,16 @@ data Rendering
 
 type Frontend ctl rndr = (MM.MonoidalMap Char [ctl], [rndr])
 
-counterWindow :: Applicative m => T.Text -> G.Window m GTC.CounterModel (Frontend ctrl Rendering)
-counterWindow txt = review G._Window $ \n -> pure (mempty, [DisplayText . T.append txt . T.pack . show $ n])
+counterWindow :: Monad m => T.Text -> G.WindowT GTC.CounterModel (Frontend ctrl Rendering) m ()
+counterWindow txt = do
+    n <- ask
+    id %= (`mappend` (mempty, [DisplayText . T.append txt . T.pack . show $ n]))
 
 counterButtonWindow
-  :: Applicative m => (GTC.CounterAction -> ctl) -> Char -> T.Text -> GTC.CounterAction -> G.Window m GTC.CounterModel (Frontend ctl Rendering)
-counterButtonWindow sendAction c txt action = review G._Window $ \ n -> pure (view (from _Wrapped') $ M.singleton c [ctl n], [render txt])
+  :: Monad m => (GTC.CounterAction -> ctl) -> Char -> T.Text -> GTC.CounterAction -> G.WindowT GTC.CounterModel (Frontend ctl Rendering) m ()
+counterButtonWindow sendAction c txt action = do
+    n <- ask
+    id %= (`mappend` (view (from _Wrapped') $ M.singleton c [ctl n], [render txt]))
   where
     render = DisplayText
     -- NB. Although it's possible to have different control behaviour based on the state
@@ -91,23 +96,27 @@ counterButtonWindow sendAction c txt action = review G._Window $ \ n -> pure (vi
     -- It is much safer to have stateful logic in the `Gadget`, instead of the `Window`.
     ctl = const $ sendAction action
 
-fieldWindow :: Applicative m => (a -> T.Text) -> G.Window m a (Frontend ctrl Rendering)
-fieldWindow f = review G._Window $ \msg -> pure
-    ( mempty --ctls
-    , let msg' = f msg
-      in if T.null $ msg' -- render
-      then []
-      else pure . DisplayText $ msg'
-    )
+fieldWindow :: Monad m => (a -> T.Text) -> G.WindowT a (Frontend ctrl Rendering) m ()
+fieldWindow f = do
+    msg <- ask
+    id %= (`mappend` ( mempty --ctls
+                     , let msg' = f msg
+                       in if T.null $ msg' -- render
+                         then []
+                         else pure . DisplayText $ msg'
+                     )
+          )
 
-quitWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget m GTA.AppModel (Frontend ctl Rendering) m GTA.AppAction [AppCommand]
+quitWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget (Frontend ctl Rendering) m () GTA.AppAction GTA.AppModel m [AppCommand]
 quitWidget sendAction =
     G.Widget
-        (G.Window $
-         pure
-             ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuittingAction]
-             , [DisplayText "Press 'q' to quit"]))
-        (G.Gadget $ do
+        (do
+                id %= (`mappend`
+                       ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuittingAction]
+                       , [DisplayText "Press 'q' to quit"])
+                      )
+        )
+        (G.GadgetT $ do
              a <- ask
              lift $
                  case a of
@@ -119,31 +128,35 @@ quitWidget sendAction =
 
 messageWidget ::
   (GTA.HasMessageModel s T.Text, GTA.AsAppAction a, Monad m) =>
-  G.Widget m s (MM.MonoidalMap Char [ctrl], [Rendering]) m a [r]
+  G.Widget (MM.MonoidalMap Char [ctrl], [Rendering]) m () a s m [c]
 messageWidget =  G.implant GTA.messageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
     (fieldWindow (\s -> (T.append "Message: " s)))
     GTF.fieldGadget
 
 spaceWindow ::
-  (Monoid t, Applicative m) => G.Window m s (t, [Rendering])
-spaceWindow = G.Window $ pure (mempty, [DisplayText " "])
+  (Monoid t, Monad m) => G.WindowT s (t, [Rendering]) m ()
+spaceWindow = do
+    msg <- ask
+    id %= (`mappend` (mempty, [DisplayText " "]))
 
 newlineWindow ::
-  (Monoid t, Applicative m) => G.Window m s (t, [Rendering])
-newlineWindow = G.Window $ pure (mempty, [DisplayText "\n"])
+  (Monoid t, Monad m) => G.WindowT s (t, [Rendering]) m ()
+newlineWindow = do
+    msg <- ask
+    id %= (`mappend` (mempty, [DisplayText "\n"]))
 
 counterWidget ::
   (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m) =>
   (GTC.CounterAction -> ctl)
   -> G.Widget
-       m s (MM.MonoidalMap Char [ctl], [Rendering]) m a [GTC.CounterCommand]
+       (MM.MonoidalMap Char [ctl], [Rendering]) m () a s m [GTC.CounterCommand]
 counterWidget sendAction' = G.implant GTA.counterModel $ G.dispatch GTC._CounterAction $
    G.Widget
     -- NB. Don't have a counterButtonGadget per buttonWindow - that will mean
     -- an inc/dec action will be evaluated twice!
     -- Ie. consider making update idempotent to avoid manually worrrying about this problem.
     -- Alternatively, have an incrementGadget and decrementGadget.
-    (foldMap id $ intersperse spaceWindow
+    (sequenceA_ $ intersperse spaceWindow
         [ counterButtonWindow sendAction' '+' "Press '+' to increment." GTC.Increment
         , counterButtonWindow sendAction' '-' "Press '-' to decrement." GTC.Decrement
         ])
@@ -153,72 +166,70 @@ counterWidget' ::
   (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m) =>
   (GTC.CounterAction -> ctl)
   -> G.Widget
-       m s (MM.MonoidalMap Char [ctl], [Rendering]) m a [AppCommand]
+       (MM.MonoidalMap Char [ctl], [Rendering]) m () a s m [AppCommand]
 counterWidget' sendAction' = fmap AppCounterCommand <$> (counterWidget sendAction')
 
 menuWidget ::
   Monad m =>
   (GTA.AppAction -> ctl)
   -> G.Widget
-       m
-       GTA.AppModel
        (MM.MonoidalMap Char [ctl], [Rendering])
        m
+       ()
        GTA.AppAction
+       GTA.AppModel
+       m
        [AppCommand]
 menuWidget sendAction = foldMap id $ intersperse (G.statically spaceWindow) [counterWidget' sendAction', quitWidget sendAction]
   where sendAction' = sendAction . GTA.AppCounterAction
 
 counterDisplayWidget ::
   (GTA.HasCounterModel s Int, Monoid c, Monad m) =>
-  G.Widget m s (MM.MonoidalMap Char [ctrl], [Rendering]) m a c
+  G.Widget (MM.MonoidalMap Char [ctrl], [Rendering]) m () a s m c
 counterDisplayWidget = G.implant GTA.counterModel $ G.statically $ counterWindow "Current count is: "
 
 signal1Window ::
-  (GTS.HasSignal1 s (f (D.DecimalRaw i)), Applicative m,
-   Show (f (D.DecimalRaw i)), Functor f, Integral i) =>
-  G.Window m s (Frontend ctrl Rendering)
+  (GTS.HasSignal1 s (Maybe D.Decimal), Monad m) =>
+  G.WindowT s (Frontend ctrl Rendering) m ()
 signal1Window = fieldWindow $ \s -> "Signal1: " `T.append` (T.pack . show $ D.roundTo 2 <$> s ^. GTS.signal1)
 
 signal2Window ::
-  (GTS.HasSignal2 s (f (D.DecimalRaw i)), Applicative m,
-   Show (f (D.DecimalRaw i)), Functor f, Integral i) =>
-  G.Window m s (Frontend ctrl Rendering)
+  (GTS.HasSignal2 s (Maybe D.Decimal), Monad m) =>
+  G.WindowT s (Frontend ctrl Rendering) m ()
 signal2Window = fieldWindow $ \s -> "Signal2: " `T.append` (T.pack . show $ D.roundTo 2 <$> s ^. GTS.signal2)
 
 ratioWindow ::
-  (GTS.HasRatioOfSignals s [D.Decimal], Applicative m) =>
-  G.Window m s (Frontend ctrl Rendering)
+  (GTS.HasRatioOfSignals s [D.Decimal], Monad m) =>
+  G.WindowT s (Frontend ctrl Rendering) m ()
 ratioWindow = fieldWindow $ \s -> "Ratio: " `T.append` (T.pack . show $ D.roundTo 2 <$> s ^? (GTS.ratioOfSignals . ix 0))
 
 ratioThresholdCrossedWindow ::
-  (GTS.HasRatioThresholdCrossed s a, Applicative m, Show a) =>
-  G.Window m s (Frontend ctrl Rendering)
+  (GTS.HasRatioThresholdCrossed s a, Monad m, Show a) =>
+  G.WindowT s (Frontend ctrl Rendering) m ()
 ratioThresholdCrossedWindow = fieldWindow $ \s -> "Crossed?: " `T.append` (T.pack . show $ s ^. GTS.ratioThresholdCrossed)
 
 ratioThresholdCrossedPinWindow ::
-  (GTS.HasRatioThresholdCrossedPin s D.Decimal, Applicative m) =>
-  G.Window m s (Frontend ctrl Rendering)
+  (GTS.HasRatioThresholdCrossedPin s D.Decimal, Monad m) =>
+  G.WindowT s (Frontend ctrl Rendering) m ()
 ratioThresholdCrossedPinWindow = fieldWindow $ \s -> "CrossedPin: " `T.append` (T.pack . show $ s ^. GTS.ratioThresholdCrossedPin)
 
 signalsWindow ::
   (GTS.HasRatioOfSignals s [D.Decimal],
    GTS.HasRatioThresholdCrossed s a,
    GTS.HasRatioThresholdCrossedPin s D.Decimal,
-   GTS.HasSignal1 s (f D.Decimal),
-   GTS.HasSignal2 s (f1 D.Decimal), Applicative m,
-   Show (f1 D.Decimal), Show (f D.Decimal), Show a,
-   Functor f1, Functor f) =>
-  G.Window m s (MM.MonoidalMap Char [ctrl], [Rendering])
-signalsWindow = foldMap id $ intersperse newlineWindow[signal1Window, signal2Window, ratioWindow, ratioThresholdCrossedWindow, ratioThresholdCrossedPinWindow]
+   GTS.HasSignal1 s (Maybe D.Decimal),
+   GTS.HasSignal2 s (Maybe D.Decimal), Monad m,
+   Show a) =>
+  G.WindowT s (MM.MonoidalMap Char [ctrl], [Rendering]) m ()
+signalsWindow = foldMap id $ intersperse newlineWindow [signal1Window, signal2Window, ratioWindow, ratioThresholdCrossedWindow, ratioThresholdCrossedPinWindow]
 
 signalsWidget ::
   (GTA.HasStreamModel s GTS.StreamModel, GTA.AsAppAction a,
    Monad m) =>
-  G.Widget m s (MM.MonoidalMap Char [ctrl], [Rendering]) m a [r]
+  G.Widget (MM.MonoidalMap Char [ctrl], [Rendering]) m () a s m [c]
 signalsWidget = G.implant GTA.streamModel $ G.dispatch (GTA._SetStreamModel . GTF._FieldAction) $ G.Widget signalsWindow GTF.fieldGadget
 
-appWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget m GTA.AppModel (Frontend ctl Rendering) m GTA.AppAction [AppCommand]
+appWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget (Frontend ctl Rendering) m () GTA.AppAction GTA.AppModel m [AppCommand]
 appWidget sendAction = foldMap id $
     intersperse (G.statically newlineWindow)
     [ G.statically newlineWindow
@@ -277,7 +288,7 @@ renderFrame' ::
   (GTA.AppAction -> ctl)
   -> TMVar (MM.MonoidalMap Char [ctl]) -> GTA.AppModel -> m ()
 renderFrame' sendAction ctls s = do
-    (ctls', frame') <- view (G._window . G._Window) (appWidget sendAction) s
+    (_, (ctls', frame')) <- view G._WindowT (G.window $ appWidget sendAction) s mempty
     liftIO . atomically . void $ STE.forceSwapTMVar ctls ctls'
     liftIO $ renderFrame frame'
 
@@ -427,7 +438,7 @@ exampleApp
 
     -- combine the stream signal and animation effects
     let streamImpulse = (\_ _ -> ()) <$> PF.Impulse (thresholdCrossedSignal' (StreamConfig input1 input2)) <*> PF.Impulse animation
-        gadgetImpulse = PF.Impulse $ GP.gadgetToProducer inputUi (appWidget sendAction ^. G._gadget)
+        gadgetImpulse = PF.Impulse $ PM.rsProducer inputUi (G.runGadgetT . G.gadget $ appWidget sendAction)
         -- appSignalIO :: P.Producer [AppCommand] (StateT GTA.AppModel STM) ()
         -- combine the stream effects with the gadget signal, keeping only the yields from gadget signal
         appSignal = PF.impulsively $ fromMaybe mempty . PF.discreteLeft <$> (gadgetImpulse `PF.merge` streamImpulse)
