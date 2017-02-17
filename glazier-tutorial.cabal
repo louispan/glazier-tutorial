@@ -31,7 +31,7 @@ library
                      , deepseq >= 1.4 && < 2
                      , errors >= 2 && < 3
                      , extra >= 1.4 && < 2
-                     , glazier >= 0.9 && < 1
+                     , glazier >= 0.10 && < 1
                      , glazier-pipes >= 0.1.5 && < 1
                      , lens >= 4 && < 5
                      , lifted-async >= 0.9 && < 1

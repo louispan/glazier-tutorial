@@ -76,16 +76,16 @@ data Rendering
 
 type Frontend ctl rndr = (MM.MonoidalMap Char [ctl], [rndr])
 
-counterWindow :: Monad m => T.Text -> G.WindowT GTC.CounterModel (Frontend ctrl Rendering) m ()
+counterWindow :: Monad m => T.Text -> G.WindowT GTC.CounterModel m (Frontend ctrl Rendering)
 counterWindow txt = do
     n <- ask
-    id %= (`mappend` (mempty, [DisplayText . T.append txt . T.pack . show $ n]))
+    pure (mempty, [DisplayText . T.append txt . T.pack . show $ n])
 
 counterButtonWindow
-  :: Monad m => (GTC.CounterAction -> ctl) -> Char -> T.Text -> GTC.CounterAction -> G.WindowT GTC.CounterModel (Frontend ctl Rendering) m ()
+  :: Monad m => (GTC.CounterAction -> ctl) -> Char -> T.Text -> GTC.CounterAction -> G.WindowT GTC.CounterModel m (Frontend ctl Rendering)
 counterButtonWindow sendAction c txt action = do
     n <- ask
-    id %= (`mappend` (view (from _Wrapped') $ M.singleton c [ctl n], [render txt]))
+    pure (view (from _Wrapped') $ M.singleton c [ctl n], [render txt])
   where
     render = DisplayText
     -- NB. Although it's possible to have different control behaviour based on the state
@@ -96,26 +96,22 @@ counterButtonWindow sendAction c txt action = do
     -- It is much safer to have stateful logic in the `Gadget`, instead of the `Window`.
     ctl = const $ sendAction action
 
-fieldWindow :: Monad m => (a -> T.Text) -> G.WindowT a (Frontend ctrl Rendering) m ()
+fieldWindow :: Monad m => (a -> T.Text) -> G.WindowT a m (Frontend ctrl Rendering)
 fieldWindow f = do
     msg <- ask
-    id %= (`mappend` ( mempty --ctls
-                     , let msg' = f msg
-                       in if T.null $ msg' -- render
-                         then []
-                         else pure . DisplayText $ msg'
-                     )
-          )
+    pure ( mempty --ctls
+         , let msg' = f msg
+             in if T.null $ msg' -- render
+                then []
+                else pure . DisplayText $ msg'
+         )
 
-quitWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget (Frontend ctl Rendering) m () GTA.AppAction GTA.AppModel m [AppCommand]
+quitWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget m (Frontend ctl Rendering) GTA.AppAction GTA.AppModel m [AppCommand]
 quitWidget sendAction =
     G.Widget
-        (do
-                id %= (`mappend`
-                       ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuittingAction]
-                       , [DisplayText "Press 'q' to quit"])
-                      )
-        )
+        (pure
+             ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuittingAction]
+             , [DisplayText "Press 'q' to quit"]))
         (G.GadgetT $ do
              a <- ask
              lift $
@@ -128,54 +124,49 @@ quitWidget sendAction =
 
 messageWidget ::
   (GTA.HasMessageModel s T.Text, GTA.AsAppAction a, Monad m) =>
-  G.Widget (MM.MonoidalMap Char [ctrl], [Rendering]) m () a s m [c]
+  G.Widget m (MM.MonoidalMap Char [ctrl], [Rendering]) a s m [c]
 messageWidget =  G.implant GTA.messageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
     (fieldWindow (\s -> (T.append "Message: " s)))
     GTF.fieldGadget
 
 spaceWindow ::
-  (Monoid t, Monad m) => G.WindowT s (t, [Rendering]) m ()
-spaceWindow = do
-    msg <- ask
-    id %= (`mappend` (mempty, [DisplayText " "]))
+  (Monoid t, Applicative m) => G.WindowT s m (t, [Rendering])
+spaceWindow = pure (mempty, [DisplayText " "])
 
 newlineWindow ::
-  (Monoid t, Monad m) => G.WindowT s (t, [Rendering]) m ()
-newlineWindow = do
-    msg <- ask
-    id %= (`mappend` (mempty, [DisplayText "\n"]))
+  (Monoid t, Monad m) => G.WindowT s m (t, [Rendering])
+newlineWindow = pure (mempty, [DisplayText "\n"])
 
 counterWidget ::
   (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m) =>
   (GTC.CounterAction -> ctl)
   -> G.Widget
-       (MM.MonoidalMap Char [ctl], [Rendering]) m () a s m [GTC.CounterCommand]
+       m (MM.MonoidalMap Char [ctl], [Rendering]) a s m [GTC.CounterCommand]
 counterWidget sendAction' = G.implant GTA.counterModel $ G.dispatch GTC._CounterAction $
    G.Widget
     -- NB. Don't have a counterButtonGadget per buttonWindow - that will mean
     -- an inc/dec action will be evaluated twice!
     -- Ie. consider making update idempotent to avoid manually worrrying about this problem.
     -- Alternatively, have an incrementGadget and decrementGadget.
-    (sequenceA_ $ intersperse spaceWindow
+    (fold <$> (sequenceA $ intersperse spaceWindow
         [ counterButtonWindow sendAction' '+' "Press '+' to increment." GTC.Increment
         , counterButtonWindow sendAction' '-' "Press '-' to decrement." GTC.Decrement
-        ])
+        ]))
     (GTC.counterButtonGadget 5000)
 
 counterWidget' ::
   (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m) =>
   (GTC.CounterAction -> ctl)
   -> G.Widget
-       (MM.MonoidalMap Char [ctl], [Rendering]) m () a s m [AppCommand]
+       m (MM.MonoidalMap Char [ctl], [Rendering]) a s m [AppCommand]
 counterWidget' sendAction' = fmap AppCounterCommand <$> (counterWidget sendAction')
 
 menuWidget ::
   Monad m =>
   (GTA.AppAction -> ctl)
   -> G.Widget
-       (MM.MonoidalMap Char [ctl], [Rendering])
        m
-       ()
+       (MM.MonoidalMap Char [ctl], [Rendering])
        GTA.AppAction
        GTA.AppModel
        m
@@ -185,32 +176,32 @@ menuWidget sendAction = foldMap id $ intersperse (G.statically spaceWindow) [cou
 
 counterDisplayWidget ::
   (GTA.HasCounterModel s Int, Monoid c, Monad m) =>
-  G.Widget (MM.MonoidalMap Char [ctrl], [Rendering]) m () a s m c
+  G.Widget m (MM.MonoidalMap Char [ctrl], [Rendering]) a s m c
 counterDisplayWidget = G.implant GTA.counterModel $ G.statically $ counterWindow "Current count is: "
 
 signal1Window ::
   (GTS.HasSignal1 s (Maybe D.Decimal), Monad m) =>
-  G.WindowT s (Frontend ctrl Rendering) m ()
+  G.WindowT s m (Frontend ctrl Rendering)
 signal1Window = fieldWindow $ \s -> "Signal1: " `T.append` (T.pack . show $ D.roundTo 2 <$> s ^. GTS.signal1)
 
 signal2Window ::
   (GTS.HasSignal2 s (Maybe D.Decimal), Monad m) =>
-  G.WindowT s (Frontend ctrl Rendering) m ()
+  G.WindowT s m (Frontend ctrl Rendering)
 signal2Window = fieldWindow $ \s -> "Signal2: " `T.append` (T.pack . show $ D.roundTo 2 <$> s ^. GTS.signal2)
 
 ratioWindow ::
   (GTS.HasRatioOfSignals s [D.Decimal], Monad m) =>
-  G.WindowT s (Frontend ctrl Rendering) m ()
+  G.WindowT s m (Frontend ctrl Rendering)
 ratioWindow = fieldWindow $ \s -> "Ratio: " `T.append` (T.pack . show $ D.roundTo 2 <$> s ^? (GTS.ratioOfSignals . ix 0))
 
 ratioThresholdCrossedWindow ::
   (GTS.HasRatioThresholdCrossed s a, Monad m, Show a) =>
-  G.WindowT s (Frontend ctrl Rendering) m ()
+  G.WindowT s m (Frontend ctrl Rendering)
 ratioThresholdCrossedWindow = fieldWindow $ \s -> "Crossed?: " `T.append` (T.pack . show $ s ^. GTS.ratioThresholdCrossed)
 
 ratioThresholdCrossedPinWindow ::
   (GTS.HasRatioThresholdCrossedPin s D.Decimal, Monad m) =>
-  G.WindowT s (Frontend ctrl Rendering) m ()
+  G.WindowT s m (Frontend ctrl Rendering)
 ratioThresholdCrossedPinWindow = fieldWindow $ \s -> "CrossedPin: " `T.append` (T.pack . show $ s ^. GTS.ratioThresholdCrossedPin)
 
 signalsWindow ::
@@ -220,16 +211,16 @@ signalsWindow ::
    GTS.HasSignal1 s (Maybe D.Decimal),
    GTS.HasSignal2 s (Maybe D.Decimal), Monad m,
    Show a) =>
-  G.WindowT s (MM.MonoidalMap Char [ctrl], [Rendering]) m ()
+  G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering])
 signalsWindow = foldMap id $ intersperse newlineWindow [signal1Window, signal2Window, ratioWindow, ratioThresholdCrossedWindow, ratioThresholdCrossedPinWindow]
 
 signalsWidget ::
   (GTA.HasStreamModel s GTS.StreamModel, GTA.AsAppAction a,
    Monad m) =>
-  G.Widget (MM.MonoidalMap Char [ctrl], [Rendering]) m () a s m [c]
+  G.Widget m (MM.MonoidalMap Char [ctrl], [Rendering]) a s m [c]
 signalsWidget = G.implant GTA.streamModel $ G.dispatch (GTA._SetStreamModel . GTF._FieldAction) $ G.Widget signalsWindow GTF.fieldGadget
 
-appWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget (Frontend ctl Rendering) m () GTA.AppAction GTA.AppModel m [AppCommand]
+appWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget m (Frontend ctl Rendering) GTA.AppAction GTA.AppModel m [AppCommand]
 appWidget sendAction = foldMap id $
     intersperse (G.statically newlineWindow)
     [ G.statically newlineWindow
@@ -288,7 +279,7 @@ renderFrame' ::
   (GTA.AppAction -> ctl)
   -> TMVar (MM.MonoidalMap Char [ctl]) -> GTA.AppModel -> m ()
 renderFrame' sendAction ctls s = do
-    (_, (ctls', frame')) <- view G._WindowT (G.window $ appWidget sendAction) s mempty
+    (ctls', frame') <- view G._WindowT (G.window $ appWidget sendAction) s
     liftIO . atomically . void $ STE.forceSwapTMVar ctls ctls'
     liftIO $ renderFrame frame'
 
