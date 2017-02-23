@@ -106,13 +106,13 @@ fieldWindow f = do
                 else pure . DisplayText $ msg'
          )
 
-quitWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget m (Frontend ctl Rendering) GTA.AppAction GTA.AppModel m [AppCommand]
-quitWidget sendAction =
-    G.Widget
-        (pure
-             ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuittingAction]
-             , [DisplayText "Press 'q' to quit"]))
-        (G.GadgetT $ do
+quitWidget :: Monad m => (GTA.AppAction -> ctl) -> (G.WindowT GTA.AppModel m (Frontend ctl Rendering),
+                                                    G.GadgetT GTA.AppAction GTA.AppModel m [AppCommand])
+quitWidget sendAction = (w, g)
+  where
+    w = pure ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuittingAction]
+             , [DisplayText "Press 'q' to quit"])
+    g = G.GadgetT $ do
              a <- ask
              lift $
                  case a of
@@ -120,11 +120,12 @@ quitWidget sendAction =
                          GTA.messageModel .= "Quitting"
                          pure [AppActionCommand GTA.QuitAction]
                      GTA.QuitAction -> pure [QuitCommand] -- quit immediately
-                     _ -> pure [])
+                     _ -> pure []
 
 messageWidget ::
   (GTA.HasMessageModel s T.Text, GTA.AsAppAction a, Monad m) =>
-  G.Widget m (MM.MonoidalMap Char [ctrl], [Rendering]) a s m [c]
+  (G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering]),
+   G.GadgetT a s m [c])
 messageWidget =  G.implant GTA.messageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
     (fieldWindow (\s -> (T.append "Message: " s)))
     GTF.fieldGadget
