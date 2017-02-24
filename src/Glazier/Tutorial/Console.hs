@@ -33,7 +33,6 @@ import Data.List (intersperse)
 import qualified Data.Map.Monoidal.Strict as MM
 import qualified Data.Map.Strict as M
 import Data.Maybe
-import Data.Semigroup
 import qualified Data.Text as T
 import qualified Glazier as G
 import qualified Glazier.Pipes.Ui as GP
@@ -122,13 +121,13 @@ quitWidget sendAction = (w, g)
                      GTA.QuitAction -> pure [QuitCommand] -- quit immediately
                      _ -> pure []
 
-messageWidget ::
-  (GTA.HasMessageModel s T.Text, GTA.AsAppAction a, Monad m) =>
-  (G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering]),
-   G.GadgetT a s m [c])
-messageWidget =  G.implant GTA.messageModel $ G.dispatch (GTA._AppMessageAction . GTF._FieldAction) $ G.Widget
-    (fieldWindow (\s -> (T.append "Message: " s)))
-    GTF.fieldGadget
+messageWidget
+    :: (GTA.HasMessageModel s T.Text, GTA.AsAppAction a, Monad m)
+    => (G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering]), G.GadgetT a s m [c])
+messageWidget = (w, g)
+  where
+    w = magnify GTA.messageModel (fieldWindow (\s -> (T.append "Message: " s)))
+    g = zoom GTA.messageModel $ magnify (GTA._AppMessageAction . GTF._FieldAction) $ GTF.fieldGadget
 
 spaceWindow ::
   (Monoid t, Applicative m) => G.WindowT s m (t, [Rendering])
@@ -138,47 +137,52 @@ newlineWindow ::
   (Monoid t, Monad m) => G.WindowT s m (t, [Rendering])
 newlineWindow = pure (mempty, [DisplayText "\n"])
 
-counterWidget ::
-  (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m) =>
-  (GTC.CounterAction -> ctl)
-  -> G.Widget
-       m (MM.MonoidalMap Char [ctl], [Rendering]) a s m [GTC.CounterCommand]
-counterWidget sendAction' = G.implant GTA.counterModel $ G.dispatch GTC._CounterAction $
-   G.Widget
+counterWidget
+    :: (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m)
+    => (GTC.CounterAction -> ctl)
+    -> (G.WindowT s m (MM.MonoidalMap Char [ctl], [Rendering]), G.GadgetT a s m [GTC.CounterCommand])
+counterWidget sendAction' = (w, g)
+  where
+    w = magnify GTA.counterModel (fold <$> (sequenceA $ intersperse spaceWindow
+        [ counterButtonWindow sendAction' '+' "Press '+' to increment." GTC.Increment
+        , counterButtonWindow sendAction' '-' "Press '-' to decrement." GTC.Decrement
+        ]))
     -- NB. Don't have a counterButtonGadget per buttonWindow - that will mean
     -- an inc/dec action will be evaluated twice!
     -- Ie. consider making update idempotent to avoid manually worrrying about this problem.
     -- Alternatively, have an incrementGadget and decrementGadget.
-    (fold <$> (sequenceA $ intersperse spaceWindow
-        [ counterButtonWindow sendAction' '+' "Press '+' to increment." GTC.Increment
-        , counterButtonWindow sendAction' '-' "Press '-' to decrement." GTC.Decrement
-        ]))
-    (GTC.counterButtonGadget 5000)
+    g = zoom GTA.counterModel $ magnify GTC._CounterAction $ GTC.counterButtonGadget 5000
 
-counterWidget' ::
-  (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m) =>
-  (GTC.CounterAction -> ctl)
-  -> G.Widget
-       m (MM.MonoidalMap Char [ctl], [Rendering]) a s m [AppCommand]
-counterWidget' sendAction' = fmap AppCounterCommand <$> (counterWidget sendAction')
+counterWidget'
+    :: (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m)
+    => (GTC.CounterAction -> ctl)
+    -> (G.WindowT s m (MM.MonoidalMap Char [ctl], [Rendering]), G.GadgetT a s m [AppCommand])
+counterWidget' sendAction' = (w, fmap AppCounterCommand <$> g)
+  where
+    (w, g) = counterWidget sendAction'
 
 menuWidget ::
   Monad m =>
   (GTA.AppAction -> ctl)
-  -> G.Widget
+  -> (G.WindowT GTA.AppModel
        m
-       (MM.MonoidalMap Char [ctl], [Rendering])
+       (MM.MonoidalMap Char [ctl], [Rendering]),
+         G.GadgetT
        GTA.AppAction
        GTA.AppModel
        m
-       [AppCommand]
-menuWidget sendAction = foldMap id $ intersperse (G.statically spaceWindow) [counterWidget' sendAction', quitWidget sendAction]
-  where sendAction' = sendAction . GTA.AppCounterAction
+       [AppCommand])
+menuWidget sendAction = (w, g)
+  where
+    w = foldMap id $ intersperse spaceWindow $ fst <$> wgs
+    g = foldMap id $ fmap snd wgs
+    wgs = [counterWidget' sendAction', quitWidget sendAction]
+    sendAction' = sendAction . GTA.AppCounterAction
 
-counterDisplayWidget ::
-  (GTA.HasCounterModel s Int, Monoid c, Monad m) =>
-  G.Widget m (MM.MonoidalMap Char [ctrl], [Rendering]) a s m c
-counterDisplayWidget = G.implant GTA.counterModel $ G.statically $ counterWindow "Current count is: "
+counterDisplayWindow ::
+  (GTA.HasCounterModel s Int, Monad m) =>
+  G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering])
+counterDisplayWindow = magnify GTA.counterModel $ counterWindow "Current count is: "
 
 signal1Window ::
   (GTS.HasSignal1 s (Maybe D.Decimal), Monad m) =>
@@ -215,22 +219,30 @@ signalsWindow ::
   G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering])
 signalsWindow = foldMap id $ intersperse newlineWindow [signal1Window, signal2Window, ratioWindow, ratioThresholdCrossedWindow, ratioThresholdCrossedPinWindow]
 
-signalsWidget ::
-  (GTA.HasStreamModel s GTS.StreamModel, GTA.AsAppAction a,
-   Monad m) =>
-  G.Widget m (MM.MonoidalMap Char [ctrl], [Rendering]) a s m [c]
-signalsWidget = G.implant GTA.streamModel $ G.dispatch (GTA._SetStreamModel . GTF._FieldAction) $ G.Widget signalsWindow GTF.fieldGadget
+signalsWidget
+    :: (GTA.HasStreamModel s GTS.StreamModel, GTA.AsAppAction a, Monad m)
+    => (G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering]), G.GadgetT a s m [c])
+signalsWidget = (w, g)
+  where
+    w = magnify GTA.streamModel signalsWindow
+    g = zoom GTA.streamModel $ magnify (GTA._SetStreamModel . GTF._FieldAction) GTF.fieldGadget
 
-appWidget :: Monad m => (GTA.AppAction -> ctl) -> G.Widget m (Frontend ctl Rendering) GTA.AppAction GTA.AppModel m [AppCommand]
-appWidget sendAction = foldMap id $
-    intersperse (G.statically newlineWindow)
-    [ G.statically newlineWindow
-    , messageWidget
-    , counterDisplayWidget
-    , signalsWidget
-    , menuWidget sendAction
-    , G.statically newlineWindow
-    ]
+appWidget
+    :: Monad m
+    => (GTA.AppAction -> ctl)
+    -> (G.WindowT GTA.AppModel m (Frontend ctl Rendering), G.GadgetT GTA.AppAction GTA.AppModel m [AppCommand])
+appWidget sendAction = (w, g)
+  where
+    w = foldMap id $ intersperse newlineWindow $ fst <$> wgs
+    g = foldMap id $ snd <$> wgs
+    wgs =
+        [ (newlineWindow, mempty)
+        , messageWidget
+        , (counterDisplayWindow, mempty)
+        , signalsWidget
+        , menuWidget sendAction
+        , (newlineWindow, mempty)
+        ]
 
 renderFrame :: MonadIO io => [Rendering] -> io ()
 renderFrame frame = do
@@ -280,7 +292,7 @@ renderFrame' ::
   (GTA.AppAction -> ctl)
   -> TMVar (MM.MonoidalMap Char [ctl]) -> GTA.AppModel -> m ()
 renderFrame' sendAction ctls s = do
-    (ctls', frame') <- view G._WindowT (G.window $ appWidget sendAction) s
+    (ctls', frame') <- view G._WindowT (fst $ appWidget sendAction) s
     liftIO . atomically . void $ STE.forceSwapTMVar ctls ctls'
     liftIO $ renderFrame frame'
 
@@ -430,7 +442,7 @@ exampleApp
 
     -- combine the stream signal and animation effects
     let streamImpulse = (\_ _ -> ()) <$> PF.Impulse (thresholdCrossedSignal' (StreamConfig input1 input2)) <*> PF.Impulse animation
-        gadgetImpulse = PF.Impulse $ PM.rsProducer inputUi (G.runGadgetT . G.gadget $ appWidget sendAction)
+        gadgetImpulse = PF.Impulse $ PM.rsProducer inputUi (G.runGadgetT . snd $ appWidget sendAction)
         -- appSignalIO :: P.Producer [AppCommand] (StateT GTA.AppModel STM) ()
         -- combine the stream effects with the gadget signal, keeping only the yields from gadget signal
         appSignal = PF.impulsively $ fromMaybe mempty . PF.discreteLeft <$> (gadgetImpulse `PF.merge` streamImpulse)

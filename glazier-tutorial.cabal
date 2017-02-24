@@ -31,7 +31,7 @@ library
                      , deepseq >= 1.4 && < 2
                      , errors >= 2 && < 3
                      , extra >= 1.4 && < 2
-                     , glazier >= 0.10 && < 1
+                     , glazier >= 0.11 && < 1
                      , glazier-pipes >= 0.1.5 && < 1
                      , lens >= 4 && < 5
                      , lifted-async >= 0.9 && < 1
@@ -43,7 +43,7 @@ library
                      , pipes >= 4 && < 5
                      , pipes-concurrency >= 2 && < 3
                      , pipes-fluid >= 0.4 && < 1
-                     , pipes-misc >= 0.3 && < 1
+                     , pipes-misc >= 0.2.5 && < 1
                      , stm >= 2.4 && < 3
                      , stm-extras > 0.1 &&  < 1
                      , text >= 1 && < 2
