@@ -1,5 +1,5 @@
 name:                glazier-tutorial
-version:             0.4.0.0
+version:             0.5.0.0
 synopsis:            Console example of using the Glazier FRP framework with pipes-fluid for the signal network.
 description:         Please see README.md
 homepage:            https://github.com/louispan/glazier-tutorial#readme
@@ -31,7 +31,7 @@ library
                      , deepseq >= 1.4 && < 2
                      , errors >= 2 && < 3
                      , extra >= 1.4 && < 2
-                     , glazier >= 0.11 && < 1
+                     , glazier >= 0.12 && < 1
                      , glazier-pipes >= 0.1.5 && < 1
                      , lens >= 4 && < 5
                      , lifted-async >= 0.9 && < 1

@@ -106,7 +106,7 @@ fieldWindow f = do
          )
 
 quitWidget :: Monad m => (GTA.AppAction -> ctl) -> (G.WindowT GTA.AppModel m (Frontend ctl Rendering),
-                                                    G.GadgetT GTA.AppAction GTA.AppModel m [AppCommand])
+                                                    G.GadgetT e GTA.AppAction GTA.AppModel m [AppCommand])
 quitWidget sendAction = (w, g)
   where
     w = pure ( MM.MonoidalMap $ M.singleton 'q' [sendAction GTA.QuittingAction]
@@ -123,7 +123,7 @@ quitWidget sendAction = (w, g)
 
 messageWidget
     :: (GTA.HasMessageModel s T.Text, GTA.AsAppAction a, Monad m)
-    => (G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering]), G.GadgetT a s m [c])
+    => (G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering]), G.GadgetT e a s m [c])
 messageWidget = (w, g)
   where
     w = magnify GTA.messageModel (fieldWindow (\s -> (T.append "Message: " s)))
@@ -140,7 +140,7 @@ newlineWindow = pure (mempty, [DisplayText "\n"])
 counterWidget
     :: (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m)
     => (GTC.CounterAction -> ctl)
-    -> (G.WindowT s m (MM.MonoidalMap Char [ctl], [Rendering]), G.GadgetT a s m [GTC.CounterCommand])
+    -> (G.WindowT s m (MM.MonoidalMap Char [ctl], [Rendering]), G.GadgetT e a s m [GTC.CounterCommand])
 counterWidget sendAction' = (w, g)
   where
     w = magnify GTA.counterModel (fold <$> (sequenceA $ intersperse spaceWindow
@@ -156,22 +156,15 @@ counterWidget sendAction' = (w, g)
 counterWidget'
     :: (GTA.HasCounterModel s Int, GTC.AsCounterAction a, Monad m)
     => (GTC.CounterAction -> ctl)
-    -> (G.WindowT s m (MM.MonoidalMap Char [ctl], [Rendering]), G.GadgetT a s m [AppCommand])
+    -> (G.WindowT s m (MM.MonoidalMap Char [ctl], [Rendering]), G.GadgetT e a s m [AppCommand])
 counterWidget' sendAction' = (w, fmap AppCounterCommand <$> g)
   where
     (w, g) = counterWidget sendAction'
 
-menuWidget ::
-  Monad m =>
-  (GTA.AppAction -> ctl)
-  -> (G.WindowT GTA.AppModel
-       m
-       (MM.MonoidalMap Char [ctl], [Rendering]),
-         G.GadgetT
-       GTA.AppAction
-       GTA.AppModel
-       m
-       [AppCommand])
+menuWidget
+    :: Monad m
+    => (GTA.AppAction -> ctl)
+    -> (G.WindowT GTA.AppModel m (MM.MonoidalMap Char [ctl], [Rendering]), G.GadgetT e GTA.AppAction GTA.AppModel m [AppCommand])
 menuWidget sendAction = (w, g)
   where
     w = foldMap id $ intersperse spaceWindow $ fst <$> wgs
@@ -221,7 +214,7 @@ signalsWindow = foldMap id $ intersperse newlineWindow [signal1Window, signal2Wi
 
 signalsWidget
     :: (GTA.HasStreamModel s GTS.StreamModel, GTA.AsAppAction a, Monad m)
-    => (G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering]), G.GadgetT a s m [c])
+    => (G.WindowT s m (MM.MonoidalMap Char [ctrl], [Rendering]), G.GadgetT e a s m [c])
 signalsWidget = (w, g)
   where
     w = magnify GTA.streamModel signalsWindow
@@ -230,7 +223,7 @@ signalsWidget = (w, g)
 appWidget
     :: Monad m
     => (GTA.AppAction -> ctl)
-    -> (G.WindowT GTA.AppModel m (Frontend ctl Rendering), G.GadgetT GTA.AppAction GTA.AppModel m [AppCommand])
+    -> (G.WindowT GTA.AppModel m (Frontend ctl Rendering), G.GadgetT e GTA.AppAction GTA.AppModel m [AppCommand])
 appWidget sendAction = (w, g)
   where
     w = foldMap id $ intersperse newlineWindow $ fst <$> wgs
@@ -442,7 +435,8 @@ exampleApp
 
     -- combine the stream signal and animation effects
     let streamImpulse = (\_ _ -> ()) <$> PF.Impulse (thresholdCrossedSignal' (StreamConfig input1 input2)) <*> PF.Impulse animation
-        gadgetImpulse = PF.Impulse $ PM.rsProducer inputUi (G.runGadgetT . snd $ appWidget sendAction)
+        gadgetImpulse' = PF.Impulse $ PM.execInput inputUi (runExceptT . G.runGadgetT . snd $ appWidget sendAction)
+        gadgetImpulse = either (const []) id <$> gadgetImpulse'
         -- appSignalIO :: P.Producer [AppCommand] (StateT GTA.AppModel STM) ()
         -- combine the stream effects with the gadget signal, keeping only the yields from gadget signal
         appSignal = PF.impulsively $ fromMaybe mempty . PF.discreteLeft <$> (gadgetImpulse `PF.merge` streamImpulse)
