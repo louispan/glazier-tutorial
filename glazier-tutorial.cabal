@@ -43,7 +43,7 @@ library
                      , pipes >= 4 && < 5
                      , pipes-concurrency >= 2 && < 3
                      , pipes-fluid >= 0.4 && < 1
-                     , pipes-misc >= 0.2.5 && < 1
+                     , pipes-misc >= 0.3.1 && < 1
                      , stm >= 2.4 && < 3
                      , stm-extras > 0.1 &&  < 1
                      , text >= 1 && < 2

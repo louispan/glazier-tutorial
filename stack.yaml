@@ -6,12 +6,18 @@ resolver: nightly-2017-02-13
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
+- location: '/Users/louis/repo/hs/glazier'
+  extra-dep: true
+- location: '/Users/louis/repo/hs/glazier-pipes'
+  extra-dep: true
+- location: '/Users/louis/repo/hs/pipes-misc'
+  extra-dep: true
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:
 - glazier-0.12.0.0
 - glazier-pipes-0.1.5.1
-- pipes-misc-0.3.0.0
+- pipes-misc-0.3.1.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}
