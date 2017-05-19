@@ -15,7 +15,7 @@ data FieldAction s = SetField s | ModifyField (s -> s)
 
 makeClassyPrisms ''FieldAction
 
-fieldGadget :: Monad m => G.GadgetT (FieldAction s) e s m [c]
+fieldGadget :: Monad m => G.GadgetT (FieldAction s) s m [c]
 fieldGadget = G.GadgetT $ do
     a <- ask
     case a of

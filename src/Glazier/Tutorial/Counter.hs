@@ -24,7 +24,7 @@ data CounterCommand = UpperBoundsExceeded | LowerBoundsExceeded
 -- Otherwise, if processing it held up, you may get multiple "IncrementBy LargeNumber"
 -- which is not expected behaviour.
 -- Alternatively, consider changing the Action to be idempotent (eg only @SetCount Int@).
-counterButtonGadget :: Monad m => Int -> G.GadgetT CounterAction e CounterModel m [CounterCommand]
+counterButtonGadget :: Monad m => Int -> G.GadgetT CounterAction CounterModel m [CounterCommand]
 counterButtonGadget b = G.GadgetT $ do
   a <- ask
   case a of

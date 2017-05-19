@@ -27,7 +27,7 @@ data ThresholdCommand = ThresholdSet D.Decimal
 -- | Given a function to get the threshold from the current state,
 -- return an Update function that will ignore the input action, and
 -- return a ThresholdSet command
-thresholdGadget :: Monad m => (s -> Maybe ThresholdCommand) -> G.GadgetT e a s m [ThresholdCommand]
+thresholdGadget :: Monad m => (s -> Maybe ThresholdCommand) -> G.GadgetT a s m [ThresholdCommand]
 thresholdGadget f = G.GadgetT $ do
   s <- get
   pure (catMaybes [f s])
